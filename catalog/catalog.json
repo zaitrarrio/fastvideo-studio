@@ -1,0 +1,3350 @@
+{
+ "version": 1,
+ "weights_root": "/workspace/w",
+ "engines": {
+  "h3": {
+   "label": "H3 \u00b7 h3-rs",
+   "blurb": "MiniMax-H3 and its distillations with audio, the fastest path on Blackwell (stored MXFP8, INT8 / FP8 attention).",
+   "binary": "h3",
+   "serve": true
+  },
+  "fastwan": {
+   "label": "FastWan \u00b7 fastwan-rs",
+   "blurb": "Wan 2.1 1.3B in seconds, plus Self-Forcing long videos.",
+   "binary": "fastwan",
+   "serve": true
+  },
+  "fastvideo": {
+   "label": "FastVideo \u00b7 fastvideo-rs",
+   "blurb": "The multi-family engine: H3, LTX-2.5 and Wan 2.2 through one jobs API.",
+   "binary": "fv-serve",
+   "serve": true
+  }
+ },
+ "families": [
+  {
+   "id": "h3",
+   "engine": "h3",
+   "label": "H3",
+   "default_model": "fasth3-v2"
+  },
+  {
+   "id": "fastwan",
+   "engine": "fastwan",
+   "label": "FastWan",
+   "default_model": "fastwan-1.3b"
+  },
+  {
+   "id": "ltx",
+   "engine": "fastvideo",
+   "label": "LTX-2.5",
+   "default_model": "ltx25-distill-sol"
+  },
+  {
+   "id": "wan",
+   "engine": "fastvideo",
+   "label": "Wan 2.2",
+   "default_model": "fastwan22-ti2v-5b"
+  },
+  {
+   "id": "fv-h3",
+   "engine": "fastvideo",
+   "label": "H3 via FastVideo",
+   "default_model": "fasth3-4step-vsa"
+  }
+ ],
+ "tasks": {
+  "t2v": {
+   "label": "Text to video",
+   "inputs": []
+  },
+  "fl2v": {
+   "label": "First / last frame",
+   "inputs": [
+    "first_image",
+    "last_image"
+   ],
+   "optional": [
+    "last_image"
+   ],
+   "help": "Keyframes: a first image, optionally a last one (h3: FL2VA)."
+  },
+  "i2v": {
+   "label": "Image to video",
+   "inputs": [
+    "first_image"
+   ]
+  },
+  "ref2v": {
+   "label": "Reference",
+   "inputs": [
+    "references"
+   ],
+   "help": "Keep a subject from reference images (h3 also takes reference video / audio)."
+  },
+  "a2v": {
+   "label": "Audio to video",
+   "inputs": [
+    "audio"
+   ]
+  },
+  "long": {
+   "label": "Long video",
+   "inputs": [],
+   "help": "Causal block-by-block generation (Self-Forcing)."
+  },
+  "extend": {
+   "label": "Extend",
+   "inputs": [
+    "video"
+   ]
+  },
+  "retake": {
+   "label": "Retake",
+   "inputs": [
+    "video"
+   ]
+  },
+  "regen2k": {
+   "label": "Regenerate 2K",
+   "inputs": [
+    "draft"
+   ],
+   "help": "Refine a 480p / 768p draft to 2560\u00d71440 keeping its composition."
+  }
+ },
+ "knobs": {
+  "h3.weights": {
+   "label": "DiT weights",
+   "type": "select",
+   "options": [
+    [
+     "mxfp8",
+     "MXFP8 (W8A8, sm_100+ native, emulated below)"
+    ],
+    [
+     "native",
+     "bf16"
+    ],
+    [
+     "int8",
+     "int8"
+    ]
+   ],
+   "default": "mxfp8",
+   "group": "speed",
+   "help": "Stored MXFP8 where the catalog has a quantized file; emulated exactly on pre-Blackwell cards.",
+   "cli": "--weights"
+  },
+  "h3.decoder_weights": {
+   "label": "Video decoder weights",
+   "type": "select",
+   "options": [
+    [
+     "mxfp8",
+     "MXFP8 (51 dB vs bf16)"
+    ],
+    [
+     "native",
+     "bf16"
+    ]
+   ],
+   "default": "mxfp8",
+   "group": "speed",
+   "cli": "--decoder-weights"
+  },
+  "h3.vsa_qk8": {
+   "label": "INT8 Q\u00b7K\u1d40",
+   "type": "bool",
+   "default": true,
+   "group": "speed",
+   "help": "SageAttention-style INT8 scores (17.5 dB band, no artifacts).",
+   "cli": "--vsa-qk8"
+  },
+  "h3.pv8": {
+   "label": "FP8 P\u00b7V",
+   "type": "bool",
+   "default": true,
+   "group": "speed",
+   "help": "FP8 softmax\u00b7V (sm_89+; implies INT8 Q\u00b7K\u1d40).",
+   "cli": "--pv8"
+  },
+  "h3.attention": {
+   "label": "Attention",
+   "type": "select",
+   "options": [
+    [
+     "auto",
+     "Recipe default"
+    ],
+    [
+     "dense",
+     "Dense"
+    ],
+    [
+     "vsa",
+     "VSA (sparse)"
+    ]
+   ],
+   "default": "auto",
+   "group": "attention",
+   "cli": "--attention"
+  },
+  "h3.vsa_sparsity": {
+   "label": "VSA sparsity",
+   "type": "float",
+   "min": 0.5,
+   "max": 0.95,
+   "step": 0.05,
+   "default": 0.8,
+   "group": "attention",
+   "cli": "--vsa-sparsity",
+   "when": {
+    "attention": "vsa"
+   }
+  },
+  "h3.dense_first_steps": {
+   "label": "Dense first steps",
+   "type": "int",
+   "min": 0,
+   "max": 10,
+   "default": 0,
+   "group": "attention",
+   "cli": "--dense-first-steps",
+   "when": {
+    "attention": "vsa"
+   }
+  },
+  "h3.stream_blocks": {
+   "label": "Stream blocks from host",
+   "type": "bool",
+   "default": false,
+   "group": "memory",
+   "help": "Keep block weights in pinned host memory; for cards under ~40 GB (clips byte-identical).",
+   "cli": "--stream-blocks"
+  },
+  "h3.steps": {
+   "label": "Steps",
+   "type": "int",
+   "min": 1,
+   "max": 50,
+   "default": 49,
+   "group": "quality",
+   "help": "Uniform Euler ladder of the base model (ComfyUI's template uses 25).",
+   "cli": "--steps"
+  },
+  "h3.adapter_strength": {
+   "label": "Adapter strength",
+   "type": "float",
+   "min": 0.0,
+   "max": 2.0,
+   "step": 0.05,
+   "default": 1.0,
+   "group": "quality",
+   "cli": "--adapter-strength"
+  },
+  "h3.tables": {
+   "label": "Precomputed AdaLN tables",
+   "type": "bool",
+   "default": true,
+   "group": "speed",
+   "help": "Skip the ~46 s per-run modulation tables when a table for this variant exists on the volume."
+  },
+  "h3.preview": {
+   "label": "TAEH3 preview decode",
+   "type": "bool",
+   "default": false,
+   "group": "speed",
+   "help": "Tiny decoder instead of the full video VAE (draft quality).",
+   "cli": "--preview"
+  },
+  "h3.upscale_factor": {
+   "label": "Real-ESRGAN upscale",
+   "type": "select",
+   "options": [
+    [
+     "0",
+     "Off"
+    ],
+    [
+     "2",
+     "\u00d72"
+    ],
+    [
+     "3",
+     "\u00d73"
+    ],
+    [
+     "4",
+     "\u00d74"
+    ]
+   ],
+   "default": "0",
+   "group": "output",
+   "help": "Real-ESRGAN animevideov3 after decode; \u00d74 is sensible up to 480p, \u00d72 above."
+  },
+  "fw.weights": {
+   "label": "DiT weights",
+   "type": "select",
+   "options": [
+    [
+     "native",
+     "f16"
+    ],
+    [
+     "int8",
+     "int8 (34.6 dB)"
+    ],
+    [
+     "int4-hqq-g64",
+     "int4 HQQ g64"
+    ],
+    [
+     "int4-hqq-g64-ffn",
+     "int4 HQQ g64 + FFN"
+    ]
+   ],
+   "default": "native",
+   "group": "speed",
+   "cli": "--weights"
+  },
+  "fw.attention": {
+   "label": "Attention",
+   "type": "select",
+   "options": [
+    [
+     "auto",
+     "Auto (VSA at \u2265 81 frames)"
+    ],
+    [
+     "dense",
+     "Dense"
+    ],
+    [
+     "vsa",
+     "VSA"
+    ]
+   ],
+   "default": "auto",
+   "group": "attention",
+   "cli": "--attention"
+  },
+  "fw.vsa_sparsity": {
+   "label": "VSA sparsity",
+   "type": "float",
+   "min": 0.5,
+   "max": 0.95,
+   "step": 0.05,
+   "default": 0.8,
+   "group": "attention",
+   "cli": "--vsa-sparsity",
+   "when": {
+    "attention": "vsa"
+   }
+  },
+  "fw.cache_frames": {
+   "label": "K/V cache (latent frames)",
+   "type": "int",
+   "min": 6,
+   "max": 24,
+   "default": 12,
+   "group": "long",
+   "cli": "--cache-frames"
+  },
+  "fw.sink_frames": {
+   "label": "Sink frames",
+   "type": "int",
+   "min": 0,
+   "max": 6,
+   "default": 3,
+   "group": "long",
+   "cli": "--sink-frames"
+  },
+  "fw.tae_chunk": {
+   "label": "TAEHV chunk",
+   "type": "int",
+   "min": 1,
+   "max": 4,
+   "default": 2,
+   "group": "speed",
+   "cli": "--tae-chunk"
+  },
+  "fw.upscale_factor": {
+   "label": "Real-ESRGAN upscale",
+   "type": "select",
+   "options": [
+    [
+     "0",
+     "Off"
+    ],
+    [
+     "2",
+     "\u00d72"
+    ],
+    [
+     "4",
+     "\u00d74"
+    ]
+   ],
+   "default": "0",
+   "group": "output"
+  },
+  "fv.steps": {
+   "label": "Steps",
+   "type": "int",
+   "min": 1,
+   "max": 60,
+   "default": null,
+   "group": "quality",
+   "field": "steps"
+  },
+  "fv.guidance": {
+   "label": "Guidance",
+   "type": "float",
+   "min": 0.0,
+   "max": 15.0,
+   "step": 0.5,
+   "default": null,
+   "group": "quality",
+   "field": "guidance"
+  },
+  "fv.fps": {
+   "label": "FPS",
+   "type": "select",
+   "options": [
+    [
+     "24",
+     "24"
+    ],
+    [
+     "25",
+     "25"
+    ],
+    [
+     "48",
+     "48"
+    ],
+    [
+     "50",
+     "50"
+    ]
+   ],
+   "default": "24",
+   "group": "output",
+   "field": "fps"
+  },
+  "fv.prompt_expansion": {
+   "label": "Prompt expansion",
+   "type": "select",
+   "options": [
+    [
+     "disabled",
+     "Off"
+    ],
+    [
+     "balanced",
+     "Balanced"
+    ],
+    [
+     "quality",
+     "Quality"
+    ]
+   ],
+   "default": "disabled",
+   "group": "quality",
+   "help": "The serve-side Qwen3-VL upsampler (needs the sidecar).",
+   "field": "prompt_expansion"
+  },
+  "fv.reference_strength": {
+   "label": "Reference strength",
+   "type": "float",
+   "min": 0.0,
+   "max": 1.5,
+   "step": 0.05,
+   "default": 1.0,
+   "group": "quality",
+   "field": "reference_strength"
+  }
+ },
+ "models": [
+  {
+   "id": "fasth3-v2",
+   "engine": "h3",
+   "family": "h3",
+   "label": "FastH3 V2 \u00b7 8 steps",
+   "blurb": "The fastest full-quality H3: 8 DMD steps, VSA 0.8; stored MXFP8 recipe, 36.6 s denoise + 5.7 s decode on a 600 W PRO 6000.",
+   "tasks": [
+    "t2v"
+   ],
+   "steps": 8,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor"
+   ],
+   "recipe": {
+    "variant": "fasth3-v2",
+    "model_dir": "/workspace/w/h3-8step",
+    "transformer": "/workspace/w/h3-8step-mxfp8/transformer.safetensors",
+    "tables": "/workspace/w/h3-rs/tables/v2.tables",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--vsa-qk8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-8step",
+    "weights/h3-8step-mxfp8",
+    "h3-rs/tables"
+   ],
+   "stage": [
+    "h3-8step-mxfp8",
+    "h3-8step:text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80,
+   "tier": "turbo",
+   "recommended": true,
+   "knob_defaults": {
+    "h3.attention": "auto"
+   }
+  },
+  {
+   "id": "fasth3-v1",
+   "engine": "h3",
+   "family": "h3",
+   "label": "FastH3 V1 \u00b7 4 steps",
+   "blurb": "4 DMD steps, VSA 0.9; 30 s on a 5090 against ComfyUI's 33 s.",
+   "tasks": [
+    "t2v"
+   ],
+   "steps": 4,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor"
+   ],
+   "recipe": {
+    "variant": "fasth3-v1",
+    "model_dir": "/workspace/w/h3-base",
+    "adapter": "/workspace/w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors",
+    "tables": "/workspace/w/h3-rs/tables/v1-vsa.tables",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--vsa-qk8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/FastH3-4-step-Preview-v1-LoRA",
+    "h3-rs/tables"
+   ],
+   "stage": [
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80,
+   "verify": "adapter path / tables name against h3-rs docs/runs before first use"
+  },
+  {
+   "id": "h3-plug4",
+   "engine": "h3",
+   "family": "h3",
+   "label": "Draft \u00b7 LongLive-Plug 4 steps",
+   "blurb": "The draft tier: LongLive-Plug's four-step adapter on the base H3, dense attention, no CFG. 480p draft in 8.6 s after load, 768p 30\u201335 s; refine with Regenerate 2K.",
+   "tasks": [
+    "t2v",
+    "fl2v",
+    "ref2v"
+   ],
+   "steps": 4,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor"
+   ],
+   "recipe": {
+    "variant": "h3-plug4",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/h3-rs/plug4",
+    "tables": "/workspace/w/h3-rs/plug4/plug4.tables",
+    "tables_ref": "/workspace/w/h3-rs/plug4/plug4-ref.tables",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va",
+    "h3-rs/plug4"
+   ],
+   "stage": [
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80,
+   "tier": "draft",
+   "aliases": [
+    "draft"
+   ]
+  },
+  {
+   "id": "h3-turbo4",
+   "engine": "h3",
+   "family": "h3",
+   "label": "MiniMax-H3 Turbo \u00b7 4 steps (LightX2V)",
+   "blurb": "LightX2V's 4-step LoRA on the base H3; keyframes supported.",
+   "tasks": [
+    "t2v",
+    "fl2v"
+   ],
+   "steps": 4,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor",
+    "h3.adapter_strength"
+   ],
+   "recipe": {
+    "variant": "h3-turbo4",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/h3-ref2va/Minimax-h3-Turbo",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va"
+   ],
+   "stage": [
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80
+  },
+  {
+   "id": "h3-turbo4-ref",
+   "engine": "h3",
+   "family": "h3",
+   "label": "MiniMax-H3 Turbo Ref2VA \u00b7 4 steps",
+   "blurb": "Reference-to-video with the Ref2VA DiT and LightX2V's 4-step LoRA (46 s at 768p).",
+   "tasks": [
+    "ref2v"
+   ],
+   "steps": 4,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor",
+    "h3.adapter_strength"
+   ],
+   "recipe": {
+    "variant": "h3-turbo4-ref",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/h3-ref2va/Minimax-h3-Turbo",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va"
+   ],
+   "stage": [
+    "h3-ref2va:transformer_ref",
+    "h3-base:text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 48,
+   "min_sm": 80
+  },
+  {
+   "id": "h3-turbo8",
+   "engine": "h3",
+   "family": "h3",
+   "label": "MiniMax-H3 Turbo \u00b7 8 steps (LightX2V v1.2)",
+   "blurb": "LightX2V's 8-step v1.2 LoRA (also modulates AdaLN: tables are computed per run).",
+   "tasks": [
+    "t2v",
+    "fl2v"
+   ],
+   "steps": 8,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.preview",
+    "h3.upscale_factor",
+    "h3.adapter_strength"
+   ],
+   "recipe": {
+    "variant": "h3-turbo8",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/h3-ref2va/Minimax-h3-Turbo",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va"
+   ],
+   "stage": [
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80
+  },
+  {
+   "id": "h3-turbo8-ref",
+   "engine": "h3",
+   "family": "h3",
+   "label": "MiniMax-H3 Turbo Ref2VA \u00b7 8 steps",
+   "blurb": "Reference-to-video, 8 steps (92.7 s at 768p).",
+   "tasks": [
+    "ref2v"
+   ],
+   "steps": 8,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.preview",
+    "h3.upscale_factor",
+    "h3.adapter_strength"
+   ],
+   "recipe": {
+    "variant": "h3-turbo8-ref",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/h3-ref2va/Minimax-h3-Turbo",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va"
+   ],
+   "stage": [
+    "h3-ref2va:transformer_ref",
+    "h3-base:text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 48,
+   "min_sm": 80
+  },
+  {
+   "id": "h3",
+   "engine": "h3",
+   "family": "h3",
+   "label": "MiniMax-H3 base \u00b7 49 steps",
+   "blurb": "The undistilled model, uniform Euler, dense attention; `steps` is adjustable (25 = ComfyUI's template, 193 s on a 5090).",
+   "tasks": [
+    "t2v",
+    "fl2v",
+    "ref2v"
+   ],
+   "steps": 49,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor",
+    "h3.steps"
+   ],
+   "recipe": {
+    "variant": "h3",
+    "model_dir": "/workspace/w/h3-base",
+    "tables": "/workspace/w/h3-rs/tables/base25.tables",
+    "tables_steps": 25,
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8",
+     "--attention",
+     "dense"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va",
+    "h3-rs/tables"
+   ],
+   "stage": [
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80,
+   "tier": "max",
+   "knob_defaults": {
+    "h3.steps": 25,
+    "h3.attention": "dense"
+   }
+  },
+  {
+   "id": "h3-cfg",
+   "engine": "h3",
+   "family": "h3",
+   "label": "MiniMax-H3 CFG-distilled \u00b7 49 steps",
+   "blurb": "LongLive-Plug's CFG adapter: classifier-free guidance folded into one forward.",
+   "tasks": [
+    "t2v",
+    "fl2v"
+   ],
+   "steps": 49,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.preview",
+    "h3.upscale_factor",
+    "h3.steps",
+    "h3.adapter_strength"
+   ],
+   "recipe": {
+    "variant": "h3-cfg",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/h3-rs/cfg",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8",
+     "--attention",
+     "dense"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "h3-rs/cfg"
+   ],
+   "stage": [
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80,
+   "knob_defaults": {
+    "h3.steps": 25
+   },
+   "verify": "adapter location on the volume (h3-rs/cfg) before first use"
+  },
+  {
+   "id": "fasth3-omni",
+   "engine": "h3",
+   "family": "h3",
+   "label": "FastH3 Omni \u00b7 Ref2VA 8 steps",
+   "blurb": "Reference-to-video (PDD, 32 heads), 8 \u00d7 14.1 s on the Server Edition.",
+   "tasks": [
+    "ref2v"
+   ],
+   "steps": 8,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor"
+   ],
+   "recipe": {
+    "variant": "fasth3-omni",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/fasth3-omni-8step-v1",
+    "tables": "/workspace/w/h3-rs/tables/omni.tables",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--vsa-qk8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/fasth3-omni-8step-v1",
+    "h3-rs/tables"
+   ],
+   "stage": [
+    "fasth3-omni-8step-v1",
+    "h3-base:text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 48,
+   "min_sm": 80
+  },
+  {
+   "id": "fasth3-trim",
+   "engine": "h3",
+   "family": "h3",
+   "label": "FastH3 Trim \u00b7 NVFP4 8 steps",
+   "blurb": "42-block Trim in NVFP4 from the ComfyUI file (24 GB peak; expanded per GEMM, 8 \u00d7 5.5 s).",
+   "tasks": [
+    "t2v"
+   ],
+   "steps": 8,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.preview",
+    "h3.upscale_factor"
+   ],
+   "recipe": {
+    "variant": "fasth3-trim",
+    "model_dir": "/workspace/w/h3-base",
+    "transformer": "/workspace/w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors",
+    "flags": [
+     "--decoder-weights",
+     "mxfp8",
+     "--vsa-qk8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/fasth3-trim-8step-nvfp4"
+   ],
+   "stage": [
+    "fasth3-trim-8step-nvfp4",
+    "h3-base:text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 28,
+   "min_sm": 80,
+   "verify": "the exact NVFP4 file name under diffusion_models/"
+  },
+  {
+   "id": "pika-flex",
+   "engine": "h3",
+   "family": "h3",
+   "label": "Pika H3 Flex \u00b7 6 steps",
+   "blurb": "Pika's keyframe / reference adapters (buckets 480p / 768p, 120-frame floor).",
+   "tasks": [
+    "fl2v",
+    "ref2v"
+   ],
+   "steps": 6,
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ],
+    "floor_note": "Pika's floor is 120"
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.decoder_weights",
+    "h3.vsa_qk8",
+    "h3.pv8",
+    "h3.attention",
+    "h3.vsa_sparsity",
+    "h3.dense_first_steps",
+    "h3.stream_blocks",
+    "h3.tables",
+    "h3.preview",
+    "h3.upscale_factor"
+   ],
+   "recipe": {
+    "variant": "pika-flex",
+    "model_dir": "/workspace/w/h3-base",
+    "variant_dir": "/workspace/w/pika-h3-flex",
+    "tables": "/workspace/w/h3-rs/tables/pika.tables",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--decoder-weights",
+     "mxfp8",
+     "--pv8"
+    ]
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va",
+    "weights/pika-h3-flex",
+    "h3-rs/tables"
+   ],
+   "stage": [
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80
+  },
+  {
+   "id": "regen-2k",
+   "engine": "h3",
+   "family": "h3",
+   "label": "Open-H3 Regenerate 2K \u00b7 3 steps",
+   "blurb": "Refines a draft to 2560\u00d71440 (16:9) or 1440\u00d72560 (9:16) with the base VAE; ~450 s on the Server Edition, silent output.",
+   "tasks": [
+    "regen2k"
+   ],
+   "steps": 3,
+   "audio": false,
+   "fps": 24,
+   "sizes": [
+    [
+     2560,
+     1440
+    ],
+    [
+     1440,
+     2560
+    ]
+   ],
+   "default_size": [
+    2560,
+    1440
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 124,
+    "max": 124,
+    "default": 124,
+    "choices": [
+     124
+    ]
+   },
+   "knobs": [
+    "h3.weights",
+    "h3.pv8",
+    "h3.stream_blocks"
+   ],
+   "recipe": {
+    "variant": "regen-2k",
+    "regen_dir": "/workspace/w/open-h3-regenerate-2k",
+    "model_dir": "/workspace/w/h3-base",
+    "flags": [
+     "--weights",
+     "mxfp8",
+     "--pv8"
+    ],
+    "adaln_table": "/workspace/w/h3-rs/assets/adaln_t_table.bin"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/open-h3-regenerate-2k",
+    "h3-rs/assets"
+   ],
+   "stage": [
+    "open-h3-regenerate-2k",
+    "h3-base:transformer,text_encoder,tokenizer,vae,audio_vae"
+   ],
+   "vram_gib": 40,
+   "min_sm": 80,
+   "cli_only": true
+  },
+  {
+   "id": "fastwan-1.3b",
+   "engine": "fastwan",
+   "family": "fastwan",
+   "label": "FastWan 2.1 1.3B \u00b7 3 steps",
+   "blurb": "FastVideo's 3-step DMD distillation of Wan 2.1 1.3B. 832\u00d7480\u00d781 in 2.2 s on a 600 W PRO 6000, 1.35 s/step on a 4090.",
+   "tasks": [
+    "t2v"
+   ],
+   "steps": 3,
+   "audio": false,
+   "fps": 16,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     640,
+     352
+    ],
+    [
+     480,
+     272
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "4n+1",
+    "min": 17,
+    "max": 81,
+    "default": 81,
+    "choices": [
+     81,
+     49,
+     33,
+     17
+    ]
+   },
+   "knobs": [
+    "fw.weights",
+    "fw.attention",
+    "fw.vsa_sparsity",
+    "fw.tae_chunk",
+    "fw.upscale_factor"
+   ],
+   "recipe": {
+    "model_dir": "/workspace/w/fastwan",
+    "transformer": "/workspace/w/fastwan/transformer",
+    "tae": "/workspace/w/auxiliary/tae/taew2_1.safetensors",
+    "flags": []
+   },
+   "trees": [
+    "r2:fv-weights/weights/fastwan21-1.3b=fastwan",
+    "weights/auxiliary/tae/taew2_1.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 8,
+   "min_sm": 80,
+   "recommended": true
+  },
+  {
+   "id": "self-forcing-1.3b",
+   "engine": "fastwan",
+   "family": "fastwan",
+   "label": "Self-Forcing 1.3B \u00b7 long video",
+   "blurb": "Causal block-by-block Wan 1.3B (Apache-2.0): any length at 12.9 fps on a 4090, K/V ring cache 12 + sink 3.",
+   "tasks": [
+    "long"
+   ],
+   "steps": 4,
+   "audio": false,
+   "fps": 16,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     640,
+     352
+    ],
+    [
+     480,
+     272
+    ]
+   ],
+   "default_size": [
+    640,
+    352
+   ],
+   "frames": {
+    "grid": "12n+9",
+    "min": 57,
+    "max": 969,
+    "default": 165,
+    "choices": [
+     165,
+     321,
+     477,
+     969
+    ]
+   },
+   "knobs": [
+    "fw.cache_frames",
+    "fw.sink_frames",
+    "fw.upscale_factor"
+   ],
+   "recipe": {
+    "transformer": "/workspace/w/fastwan-public/self-forcing-1.3b-f16.safetensors",
+    "tae": "/workspace/w/auxiliary/tae/taew2_1.safetensors",
+    "text_encoder": "/workspace/w/fastwan/text_encoder",
+    "tokenizer": "/workspace/w/fastwan/tokenizer/tokenizer.json",
+    "flags": [
+     "--causal",
+     "--attention",
+     "dense"
+    ]
+   },
+   "trees": [
+    "r2:fv-weights/weights/fastwan21-1.3b=fastwan",
+    "https:weights.fastwan.dev/v1/self-forcing-1.3b-f16.safetensors=fastwan-public/self-forcing-1.3b-f16.safetensors",
+    "weights/auxiliary/tae/taew2_1.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 8,
+   "min_sm": 80,
+   "cli_only": true
+  },
+  {
+   "id": "history-forcing-1.3b",
+   "engine": "fastwan",
+   "family": "fastwan",
+   "label": "History Forcing 1.3B \u00b7 long video (evaluation only)",
+   "blurb": "Keeps the subject over 60 s but over-saturates; weights have no stated licence. Cache 21, sink 3.",
+   "tasks": [
+    "long"
+   ],
+   "steps": 4,
+   "audio": false,
+   "fps": 16,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     640,
+     352
+    ],
+    [
+     480,
+     272
+    ]
+   ],
+   "default_size": [
+    640,
+    352
+   ],
+   "frames": {
+    "grid": "12n+9",
+    "min": 57,
+    "max": 969,
+    "default": 165,
+    "choices": [
+     165,
+     321,
+     477,
+     969
+    ]
+   },
+   "knobs": [
+    "fw.cache_frames",
+    "fw.sink_frames",
+    "fw.upscale_factor"
+   ],
+   "knob_defaults": {
+    "fw.cache_frames": 21
+   },
+   "recipe": {
+    "transformer": "/workspace/w/fastwan-hf/history-forcing-1.3b-f16.safetensors",
+    "tae": "/workspace/w/auxiliary/tae/taew2_1.safetensors",
+    "text_encoder": "/workspace/w/fastwan/text_encoder",
+    "tokenizer": "/workspace/w/fastwan/tokenizer/tokenizer.json",
+    "flags": [
+     "--causal",
+     "--attention",
+     "dense"
+    ]
+   },
+   "trees": [
+    "r2:fv-weights/weights/fastwan21-1.3b=fastwan",
+    "r2:fv-weights/weights/history-forcing-1.3b=fastwan-hf",
+    "weights/auxiliary/tae/taew2_1.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 8,
+   "min_sm": 80,
+   "cli_only": true,
+   "hidden": true,
+   "verify": "the converted History Forcing file is not published; convert with scripts/convert_self_forcing.py and upload before enabling"
+  },
+  {
+   "id": "fasth3-4step-vsa",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "MiniMax-H3 Turbo (fastvideo-rs) \u00b7 4 steps",
+   "blurb": "fastvideo-rs's served H3 turbo tier (FastH3 4-step LoRA on h3-base, VSA): text, image and keyframes.",
+   "tasks": [
+    "t2v",
+    "i2v",
+    "fl2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "fasth3-4step-vsa"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/FastH3-4-step-Preview-v1-LoRA"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 89,
+   "tier": "turbo",
+   "recommended": true
+  },
+  {
+   "id": "sol-h3",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "MiniMax-H3 Max (fastvideo-rs)",
+   "blurb": "The max tier: Sol attention route on h3-base with the 4-step LoRA.",
+   "tasks": [
+    "t2v",
+    "i2v",
+    "fl2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "sol-h3"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/FastH3-4-step-Preview-v1-LoRA"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 89,
+   "tier": "max"
+  },
+  {
+   "id": "fasth3-4step-vsa-480p-taeh3",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "MiniMax-H3 Draft (fastvideo-rs) \u00b7 480p TAEH3",
+   "blurb": "480p previews through the tiny TAEH3 decoder.",
+   "tasks": [
+    "t2v",
+    "i2v",
+    "fl2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "fasth3-4step-vsa-480p-taeh3"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/FastH3-4-step-Preview-v1-LoRA",
+    "weights/auxiliary/tae/taeh3.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 89,
+   "tier": "draft"
+  },
+  {
+   "id": "h3-ref2v-turbo",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "MiniMax-H3 Ref2V Turbo (fastvideo-rs)",
+   "blurb": "Reference-to-video on the Ref2VA DiT, up to 12 references (9 images, 3 videos, 3 audios).",
+   "tasks": [
+    "ref2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion",
+    "fv.reference_strength"
+   ],
+   "recipe": {
+    "variant": "h3-ref2v-turbo"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 89,
+   "tier": "turbo"
+  },
+  {
+   "id": "h3-ref2v-max",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "MiniMax-H3 Ref2V Max (fastvideo-rs)",
+   "blurb": "Reference-to-video, max tier.",
+   "tasks": [
+    "ref2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion",
+    "fv.reference_strength"
+   ],
+   "recipe": {
+    "variant": "h3-ref2v-max"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-ref2va"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 89,
+   "tier": "max"
+  },
+  {
+   "id": "fasth3-trim-nvfp4",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "MiniMax-H3 Trim NVFP4 (fastvideo-rs)",
+   "blurb": "Trim in NVFP4 on sm_100+ tensor cores.",
+   "tasks": [
+    "t2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "fasth3-trim-nvfp4"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/fasth3-trim-8step",
+    "weights/fasth3-trim-8step-nvfp4"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 100
+  },
+  {
+   "id": "fasth3-v2-nvfp4",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "FastH3 V2 NVFP4 (fastvideo-rs)",
+   "blurb": "FastH3 V2 in NVFP4 (sm_100+).",
+   "tasks": [
+    "t2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "fasth3-v2-nvfp4"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/fasth3-v2-nvfp4"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 100
+  },
+  {
+   "id": "h3-lightx2v-turbo",
+   "engine": "fastvideo",
+   "family": "fv-h3",
+   "label": "MiniMax-H3 Turbo LightX2V (fastvideo-rs)",
+   "blurb": "LightX2V's turbo LoRA as served by fastvideo-rs.",
+   "tasks": [
+    "t2v",
+    "i2v",
+    "fl2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1344,
+     768
+    ],
+    [
+     768,
+     1344
+    ],
+    [
+     768,
+     768
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ],
+    [
+     480,
+     272
+    ],
+    [
+     272,
+     480
+    ]
+   ],
+   "default_size": [
+    1344,
+    768
+   ],
+   "frames": {
+    "grid": "17n+5",
+    "min": 107,
+    "max": 362,
+    "default": 124,
+    "choices": [
+     107,
+     124,
+     158,
+     192,
+     243,
+     294,
+     362
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "h3-lightx2v-turbo"
+   },
+   "trees": [
+    "weights/h3-base",
+    "weights/h3-turbo-loras/lightx2v"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 89
+  },
+  {
+   "id": "ltx25-distill-sol",
+   "engine": "fastvideo",
+   "family": "ltx",
+   "label": "LTX-2.5 Turbo (distilled, Sol)",
+   "blurb": "Lightricks' LTX-2.5 distilled with the Sol attention route: text, image, keyframes, audio-to-video, extend and retake; video with audio, 24\u201350 fps.",
+   "tasks": [
+    "t2v",
+    "i2v",
+    "fl2v",
+    "a2v",
+    "extend",
+    "retake"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1920,
+     1088
+    ],
+    [
+     1088,
+     1920
+    ],
+    [
+     1280,
+     704
+    ],
+    [
+     704,
+     1280
+    ],
+    [
+     1280,
+     768
+    ],
+    [
+     768,
+     1280
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    1280,
+    704
+   ],
+   "frames": {
+    "grid": "8n+1",
+    "min": 9,
+    "max": 481,
+    "default": 121,
+    "choices": [
+     49,
+     97,
+     121,
+     169,
+     241,
+     361,
+     481
+    ]
+   },
+   "knobs": [
+    "fv.fps",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "ltx25-distill-sol"
+   },
+   "trees": [
+    "weights/ltx25"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 80,
+   "tier": "turbo",
+   "recommended": true
+  },
+  {
+   "id": "ltx25-distill-dense",
+   "engine": "fastvideo",
+   "family": "ltx",
+   "label": "LTX-2.5 Max (distilled, dense)",
+   "blurb": "Dense attention, max tier.",
+   "tasks": [
+    "t2v",
+    "i2v",
+    "fl2v",
+    "extend",
+    "retake"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1920,
+     1088
+    ],
+    [
+     1088,
+     1920
+    ],
+    [
+     1280,
+     704
+    ],
+    [
+     704,
+     1280
+    ],
+    [
+     1280,
+     768
+    ],
+    [
+     768,
+     1280
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    1280,
+    704
+   ],
+   "frames": {
+    "grid": "8n+1",
+    "min": 9,
+    "max": 481,
+    "default": 121,
+    "choices": [
+     49,
+     97,
+     121,
+     169,
+     241,
+     361,
+     481
+    ]
+   },
+   "knobs": [
+    "fv.fps",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "ltx25-distill-dense"
+   },
+   "trees": [
+    "weights/ltx25"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 80,
+   "tier": "max"
+  },
+  {
+   "id": "ltx25-distill-sol-nvfp4-taehv",
+   "engine": "fastvideo",
+   "family": "ltx",
+   "label": "LTX-2.5 Draft (NVFP4, TAEHV)",
+   "blurb": "NVFP4 DiT with the tiny TAE decoder (sm_100+).",
+   "tasks": [
+    "t2v",
+    "i2v",
+    "fl2v",
+    "a2v",
+    "extend",
+    "retake"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1920,
+     1088
+    ],
+    [
+     1088,
+     1920
+    ],
+    [
+     1280,
+     704
+    ],
+    [
+     704,
+     1280
+    ],
+    [
+     1280,
+     768
+    ],
+    [
+     768,
+     1280
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "8n+1",
+    "min": 9,
+    "max": 481,
+    "default": 121,
+    "choices": [
+     49,
+     97,
+     121,
+     169,
+     241,
+     361,
+     481
+    ]
+   },
+   "knobs": [
+    "fv.fps",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "ltx25-distill-sol-nvfp4-taehv"
+   },
+   "trees": [
+    "weights/ltx25",
+    "weights/auxiliary/tae/taeltx2_3_wide.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 100,
+   "tier": "draft"
+  },
+  {
+   "id": "ltx25-ref2v",
+   "engine": "fastvideo",
+   "family": "ltx",
+   "label": "LTX-2.5 Reference (IC-LoRA)",
+   "blurb": "One reference image with the IC-LoRA ingredients.",
+   "tasks": [
+    "ref2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1280,
+     720
+    ],
+    [
+     720,
+     1280
+    ],
+    [
+     1600,
+     896
+    ],
+    [
+     896,
+     1600
+    ]
+   ],
+   "default_size": [
+    1280,
+    720
+   ],
+   "frames": {
+    "grid": "8n+1",
+    "min": 9,
+    "max": 241,
+    "default": 121,
+    "choices": [
+     49,
+     97,
+     121,
+     169,
+     241
+    ]
+   },
+   "knobs": [
+    "fv.fps",
+    "fv.prompt_expansion",
+    "fv.reference_strength"
+   ],
+   "recipe": {
+    "variant": "ltx25-ref2v"
+   },
+   "trees": [
+    "weights/ltx25",
+    "weights/ltx25-ic-lora-ingredients"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 80,
+   "tier": "max"
+  },
+  {
+   "id": "ltx25-a2v-guided",
+   "engine": "fastvideo",
+   "family": "ltx",
+   "label": "LTX-2.5 Audio-to-video (guided)",
+   "blurb": "Audio-driven video with guidance (needs the dev tree, ~38 GB host RAM).",
+   "tasks": [
+    "a2v"
+   ],
+   "audio": true,
+   "fps": 24,
+   "sizes": [
+    [
+     1920,
+     1088
+    ],
+    [
+     1088,
+     1920
+    ],
+    [
+     1280,
+     704
+    ],
+    [
+     704,
+     1280
+    ],
+    [
+     1280,
+     768
+    ],
+    [
+     768,
+     1280
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    1280,
+    704
+   ],
+   "frames": {
+    "grid": "8n+1",
+    "min": 9,
+    "max": 481,
+    "default": 121,
+    "choices": [
+     49,
+     97,
+     121,
+     169,
+     241,
+     361,
+     481
+    ]
+   },
+   "knobs": [
+    "fv.fps",
+    "fv.guidance",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "ltx25-a2v-guided"
+   },
+   "trees": [
+    "weights/ltx25",
+    "weights/ltx25-dev"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 80,
+   "tier": "max"
+  },
+  {
+   "id": "fastwan22-ti2v-5b",
+   "engine": "fastvideo",
+   "family": "wan",
+   "label": "FastWan 2.2 TI2V 5B \u00b7 turbo",
+   "blurb": "FastVideo's distilled Wan 2.2 5B: text and image to video at up to 704p.",
+   "tasks": [
+    "t2v",
+    "i2v"
+   ],
+   "audio": false,
+   "fps": 24,
+   "sizes": [
+    [
+     1280,
+     704
+    ],
+    [
+     704,
+     1280
+    ],
+    [
+     1024,
+     576
+    ],
+    [
+     576,
+     1024
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    1280,
+    704
+   ],
+   "frames": {
+    "grid": "4n+1",
+    "min": 9,
+    "max": 161,
+    "default": 121,
+    "choices": [
+     49,
+     81,
+     121,
+     161
+    ]
+   },
+   "knobs": [
+    "fv.steps",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "fastwan22-ti2v-5b"
+   },
+   "trees": [
+    "weights/fastwan22-ti2v-5b"
+   ],
+   "stage": [],
+   "vram_gib": 32,
+   "min_sm": 80,
+   "tier": "turbo",
+   "recommended": true
+  },
+  {
+   "id": "wan22-ti2v-5b",
+   "engine": "fastvideo",
+   "family": "wan",
+   "label": "Wan 2.2 TI2V 5B \u00b7 max",
+   "blurb": "The undistilled Wan 2.2 5B with CFG (steps, guidance, flow shift, negative prompt).",
+   "tasks": [
+    "t2v",
+    "i2v"
+   ],
+   "audio": false,
+   "fps": 24,
+   "sizes": [
+    [
+     1280,
+     704
+    ],
+    [
+     704,
+     1280
+    ],
+    [
+     1024,
+     576
+    ],
+    [
+     576,
+     1024
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    1280,
+    704
+   ],
+   "frames": {
+    "grid": "4n+1",
+    "min": 9,
+    "max": 161,
+    "default": 121,
+    "choices": [
+     49,
+     81,
+     121,
+     161
+    ]
+   },
+   "knobs": [
+    "fv.steps",
+    "fv.guidance",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "wan22-ti2v-5b"
+   },
+   "trees": [
+    "weights/wan22-ti2v-5b"
+   ],
+   "stage": [],
+   "vram_gib": 32,
+   "min_sm": 80,
+   "tier": "max",
+   "negative_prompt": true
+  },
+  {
+   "id": "fastwan22-ti2v-5b-taehv",
+   "engine": "fastvideo",
+   "family": "wan",
+   "label": "FastWan 2.2 5B Draft (TAEHV)",
+   "blurb": "TAEHV decode for fast previews.",
+   "tasks": [
+    "t2v",
+    "i2v"
+   ],
+   "audio": false,
+   "fps": 24,
+   "sizes": [
+    [
+     1280,
+     704
+    ],
+    [
+     704,
+     1280
+    ],
+    [
+     1024,
+     576
+    ],
+    [
+     576,
+     1024
+    ],
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "4n+1",
+    "min": 9,
+    "max": 161,
+    "default": 121,
+    "choices": [
+     49,
+     81,
+     121,
+     161
+    ]
+   },
+   "knobs": [
+    "fv.steps",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "fastwan22-ti2v-5b-taehv"
+   },
+   "trees": [
+    "weights/fastwan22-ti2v-5b",
+    "weights/auxiliary/tae/taew2_2.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 32,
+   "min_sm": 80,
+   "tier": "draft"
+  },
+  {
+   "id": "wan14b-plug-4step",
+   "engine": "fastvideo",
+   "family": "wan",
+   "label": "Wan 2.1 14B \u00b7 LongLive-Plug 4 steps",
+   "blurb": "The 14B T2V model with LongLive-Plug's few-step and CFG adapters, 480p.",
+   "tasks": [
+    "t2v"
+   ],
+   "audio": false,
+   "fps": 16,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "4n+1",
+    "min": 9,
+    "max": 81,
+    "default": 81,
+    "choices": [
+     33,
+     49,
+     81
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "wan14b-plug-4step"
+   },
+   "trees": [
+    "weights/wan21-t2v-14b",
+    "weights/longlive-plug/wan21-t2v-14b-few-step",
+    "weights/longlive-plug/wan21-t2v-14b-cfg"
+   ],
+   "stage": [],
+   "vram_gib": 80,
+   "min_sm": 80
+  },
+  {
+   "id": "fastwan21-1.3b",
+   "engine": "fastvideo",
+   "family": "wan",
+   "label": "FastWan 2.1 1.3B (fastvideo-rs)",
+   "blurb": "The same 1.3B DMD model as the fastwan-rs engine, served by fastvideo-rs.",
+   "tasks": [
+    "t2v"
+   ],
+   "audio": false,
+   "fps": 16,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "4n+1",
+    "min": 9,
+    "max": 129,
+    "default": 81,
+    "choices": [
+     33,
+     49,
+     81,
+     129
+    ]
+   },
+   "knobs": [
+    "fv.steps",
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "fastwan21-1.3b"
+   },
+   "trees": [
+    "weights/fastwan21-1.3b"
+   ],
+   "stage": [],
+   "vram_gib": 24,
+   "min_sm": 80
+  },
+  {
+   "id": "sfwan21-1.3b",
+   "engine": "fastvideo",
+   "family": "wan",
+   "label": "Self-Forcing 1.3B (fastvideo-rs)",
+   "blurb": "Causal streaming Wan 1.3B as served by fastvideo-rs (fixed 81-frame clips).",
+   "tasks": [
+    "t2v"
+   ],
+   "audio": false,
+   "fps": 16,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "12n+9",
+    "min": 9,
+    "max": 81,
+    "default": 81,
+    "choices": [
+     33,
+     57,
+     81
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "sfwan21-1.3b"
+   },
+   "trees": [
+    "weights/sfwan21-1.3b",
+    "weights/auxiliary/tae/taew2_1.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 24,
+   "min_sm": 80
+  },
+  {
+   "id": "longlive-1.3b",
+   "engine": "fastvideo",
+   "family": "wan",
+   "label": "LongLive 1.3B (non-commercial)",
+   "blurb": "LongLive's streaming model; non-commercial licence.",
+   "tasks": [
+    "t2v"
+   ],
+   "audio": false,
+   "fps": 16,
+   "sizes": [
+    [
+     832,
+     480
+    ],
+    [
+     480,
+     832
+    ]
+   ],
+   "default_size": [
+    832,
+    480
+   ],
+   "frames": {
+    "grid": "12n+9",
+    "min": 9,
+    "max": 81,
+    "default": 81,
+    "choices": [
+     33,
+     57,
+     81
+    ]
+   },
+   "knobs": [
+    "fv.prompt_expansion"
+   ],
+   "recipe": {
+    "variant": "longlive-1.3b"
+   },
+   "trees": [
+    "weights/sfwan21-1.3b",
+    "weights/longlive-1.3b-safetensors",
+    "weights/auxiliary/tae/taew2_1.safetensors"
+   ],
+   "stage": [],
+   "vram_gib": 24,
+   "min_sm": 80,
+   "hidden": true
+  }
+ ],
+ "trees": {
+  "volume": "/runpod-volume",
+  "volume_weights": "/runpod-volume/weights",
+  "volume_extras": "/runpod-volume/h3-rs",
+  "stage_dir": "/workspace/stage",
+  "link_root": "/workspace/w",
+  "note": "`trees` entries: `weights/<tree>` and `h3-rs/<sub>` are volume paths relative to /runpod-volume; `r2:<bucket>/<prefix>=<name>` and `https:<host>/<path>=<name>` are fetched to the stage dir on first use. `stage` entries follow h3-rs make_boot.py: TREE[:SUB,SUB] copied to the container disk, the rest symlinked back."
+ },
+ "upload_limits": {
+  "inline_b64_bytes": 6291456,
+  "r2_upload_bytes": 536870912
+ }
+}

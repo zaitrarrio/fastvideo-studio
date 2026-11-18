@@ -1,0 +1,30 @@
+# FastVideo Studio: the Cloudflare Worker that serves the page and holds the
+# RunPod key. Deploy from this directory: `npx wrangler@4 deploy`.
+name = "fastvideo-studio"
+main = "worker.js"
+compatibility_date = "2025-10-01"
+
+# The page. Requests that match a file under web/ are answered from the
+# asset store; everything else (the /api/* routes) reaches worker.js.
+[assets]
+directory = "./web"
+binding = "ASSETS"
+not_found_handling = "none"
+
+# Uploads (images over the inline limit, audio, video, drafts) land here under
+# uploads/<yyyy-mm>/<random>-<name>; the endpoint's worker reads them back.
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "fastvideo-studio-uploads"
+
+[vars]
+# Shown in the header next to the endpoint status.
+ENDPOINT_LABEL = "RunPod EU · PRO 6000"
+
+# Secrets (never in this file): `npx wrangler@4 secret put <NAME>`
+#   RUNPOD_API_KEY      the RunPod API key
+#   RUNPOD_ENDPOINT_ID  the serverless endpoint id (api.runpod.ai/v2/<id>)
+#   STUDIO_TOKEN        the shared secret the page sends as a bearer token
+
+[observability]
+enabled = true

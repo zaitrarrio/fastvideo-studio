@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FastVideo Studio</title>
+<meta name="description" content="One form for the H3, FastWan, LTX-2.5 and Wan 2.2 engines on a RunPod endpoint: pick a model, a task, a prompt, and watch the stages land.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<link rel="stylesheet" href="studio.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>FastVideo Studio</h1>
+    <div class="engine" aria-live="polite" role="status"><span class="dot wait" id="eng-dot"></span><span id="eng-text">Loading the catalog…</span></div>
+  </header>
+
+  <div class="grid">
+    <form class="panel" id="form" autocomplete="off">
+      <div class="connect" id="unlock" hidden>
+        <h2>Unlock the studio</h2>
+        <p class="hint">Every job costs GPU time on the endpoint, so the studio asks for its shared token once and keeps it in this browser.</p>
+        <div class="row">
+          <label class="field"><span class="label">Studio token</span><input id="token" type="password" autocomplete="off" spellcheck="false"></label>
+          <button type="button" class="ghost fixed" id="unlock-go">Unlock</button>
+        </div>
+        <p class="msg bad" id="unlock-err" hidden></p>
+      </div>
+
+      <h2>Model</h2>
+      <div class="modes" id="families" role="group" aria-label="Model family"></div>
+      <div class="cards" id="models" role="group" aria-label="Model"></div>
+
+      <h2>Task</h2>
+      <div class="chips" id="tasks" role="group" aria-label="Task"></div>
+
+      <h2>Prompt</h2>
+      <label class="field"><span class="label">Describe the clip</span>
+        <textarea id="prompt" maxlength="2000" required></textarea></label>
+      <div class="chips" id="examples" aria-label="Example prompts"></div>
+      <label class="field" id="neg-row" hidden><span class="label">Negative prompt</span>
+        <textarea id="negative" maxlength="2000" style="min-height:64px" placeholder="What to keep out of the clip"></textarea></label>
+
+      <div class="inputs" id="inputs" hidden></div>
+
+      <div class="row">
+        <label class="field"><span class="label">Size</span><select id="size"></select></label>
+        <label class="field"><span class="label">Length</span><select id="length"></select></label>
+      </div>
+      <div class="row">
+        <label class="field"><span class="label">Seed</span><input id="seed" type="number" min="0" step="1" placeholder="random"></label>
+        <button type="button" class="ghost fixed" id="dice">New seed</button>
+      </div>
+
+      <details class="adv" id="adv">
+        <summary><span>Advanced <span class="hint" id="adv-sub"></span></span></summary>
+        <div class="knobs" id="knobs"></div>
+        <div class="controls" style="padding:0 12px 12px"><button type="button" class="ghost small" id="reset">Reset to recipe</button><span class="hint" id="adv-hint">The recipe's speed settings are on by default: they are what the measurements use.</span></div>
+      </details>
+
+      <button type="submit" class="primary" id="go" disabled>Generate clip</button>
+      <p class="hint" id="steps-hint"></p>
+      <p class="msg bad" id="err" hidden></p>
+
+      <div class="cmd-row">
+        <div class="controls"><span class="label">Equivalent command on a rented box</span><button type="button" class="ghost small" id="copy">Copy</button></div>
+        <pre class="cmd" id="cmd"></pre>
+      </div>
+    </form>
+
+    <div class="column">
+      <section class="panel" aria-labelledby="out-h">
+        <div class="controls"><h2 id="out-h" style="flex:1">Clip</h2><span class="summary" id="summary" aria-live="polite"></span></div>
+        <div class="screen" id="screen">
+          <video id="video" controls playsinline loop preload="metadata" hidden></video>
+          <div class="empty" id="empty">Your clip plays here when the endpoint has uploaded it.</div>
+        </div>
+        <div class="controls">
+          <button type="button" class="ghost" id="cancel" hidden>Cancel</button>
+          <span class="links" id="links"></span>
+          <span class="hint" id="clip-hint"></span>
+        </div>
+        <div class="stages" id="stages" aria-live="polite"></div>
+        <p class="msg bad" id="job-err" hidden></p>
+        <div class="cmd-row" id="job-cmd-row" hidden>
+          <div class="controls"><span class="label">What the worker ran</span><button type="button" class="ghost small" id="job-copy">Copy</button></div>
+          <pre class="cmd" id="job-cmd"></pre>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="hist-h">
+        <h2 id="hist-h">This session</h2>
+        <div class="history" id="history"></div>
+        <details class="info" id="info">
+          <summary>Endpoint <span class="hint" id="info-sub"></span></summary>
+          <div class="body">
+            <dl class="kv" id="info-kv"></dl>
+            <div class="controls"><button type="button" class="ghost small" id="info-go">Refresh</button><span class="hint" id="info-hint">Runs <code>op: info</code> on a worker (starts one when none is up).</span></div>
+          </div>
+        </details>
+      </section>
+    </div>
+  </div>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

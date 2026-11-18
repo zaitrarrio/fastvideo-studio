@@ -152,16 +152,51 @@ class Worker:
                 return self.warm(inp, progress)
             if op == "generate":
                 return self.generate(str(job.get("id") or f"local-{int(time.time())}"), inp, progress)
+            if op == "r2":
+                return self.r2check()
             raise JobError("validate", f"unknown op {op!r}")
         except JobError as e:
             self.log(f"job failed ({e.where}): {e.message}")
             return e.to_output()
         except Exception as e:  # noqa: BLE001
             self.log(f"job crashed: {type(e).__name__}: {e}")
-            tail = []
-            for sc in self.sidecars.sidecars.values():
-                tail += sc.tail(10)
+            # Only the job's own engine's sidecar log: another engine's tail
+            # misled the first smoke (fastwan's crash carried h3's log).
+            sc = self.sidecars.get(str(inp.get("engine") or ""))
+            tail = sc.tail(50) if sc is not None else []
             return JobError("engine", f"{type(e).__name__}: {e}", tail[-50:]).to_output()
+
+    def r2check(self) -> dict:
+        """`op: r2`: can this worker write the Studio bucket and read the
+        weights store? Names and outcomes only, never a secret."""
+        e = os.environ
+        key = e.get("STUDIO_R2_ACCESS_KEY_ID") or e.get("FV_R2_ACCESS_KEY_ID") or ""
+        out: dict = {
+            "op": "r2",
+            "bucket": self.bucket,
+            "endpoint": e.get("STUDIO_R2_ENDPOINT") or e.get("FV_R2_ENDPOINT") or None,
+            "access_key_id_len": len(key),
+            "access_key_id_unsubstituted": key.startswith("{{"),
+            "weights_bucket": self.weights.weights_bucket,
+        }
+        if self.store is None or not self.bucket:
+            out["write"] = "no object store configured"
+            return out
+        probe = self.cfg.jobs_dir / "r2-probe.txt"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text(f"fastvideo-studio r2 probe {time.time():.0f}\n")
+        try:
+            self.store.put_file(self.bucket, "probe/r2check.txt", probe, "text/plain")
+            out["write"] = "ok"
+            out["presigned_url_host"] = self.store.presign_get(self.bucket, "probe/r2check.txt", 60).split("/")[2]
+        except Exception as ex:  # noqa: BLE001
+            out["write"] = f"{type(ex).__name__}: {ex}"[:300]
+        try:
+            keys = [k for k, _ in self.store.list_keys(self.weights.weights_bucket, "manifests/")]
+            out["read_weights"] = f"ok ({len(keys)} manifests)"
+        except Exception as ex:  # noqa: BLE001
+            out["read_weights"] = f"{type(ex).__name__}: {ex}"[:300]
+        return out
 
     def info(self) -> dict:
         g = gpu.query()

@@ -3,6 +3,7 @@ non-resident) driven through its native jobs API `/fv/v1/jobs`."""
 
 from __future__ import annotations
 
+import re
 import shlex
 import shutil
 import time
@@ -46,8 +47,34 @@ def media_urls(ctx: Ctx, job: Job) -> dict[str, Any]:
     return out
 
 
-def serve_argv(ctx: Ctx) -> list[str]:
-    return [ctx.fv_serve_bin, "--config", ctx.fv_config]
+def resident_config(base: str, variant: str) -> str:
+    """The worker's config with `variant` as the one `resident = true` model:
+    fv-serve refuses a config where nothing loads before readiness, and with
+    `swap = true` the other models still load on their first request."""
+    out = []
+    current = None
+    found = False
+    for line in base.splitlines():
+        m = re.match(r'\s*variant\s*=\s*"([^"]+)"', line)
+        if m:
+            current = m.group(1)
+        if re.match(r"\s*resident\s*=", line):
+            on = current == variant
+            found = found or on
+            line = f"resident = {'true' if on else 'false'}"
+        out.append(line)
+    if not found:
+        raise JobError("validate", f"fastvideo config lists no model {variant!r}")
+    return "\n".join(out) + "\n"
+
+
+def serve_argv(ctx: Ctx, variant: str | None = None) -> list[str]:
+    if variant is None:
+        return [ctx.fv_serve_bin, "--config", ctx.fv_config]
+    cfg = Path(ctx.fv_state_dir) / "fastvideo.toml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(resident_config(Path(ctx.fv_config).read_text(), variant))
+    return [ctx.fv_serve_bin, "--config", str(cfg)]
 
 
 def run(ctx: Ctx, job: Job) -> RunResult:
@@ -56,7 +83,8 @@ def run(ctx: Ctx, job: Job) -> RunResult:
     load_s = 0.0
     if not ctx.fv_fake:
         def make() -> Sidecar:
-            return Sidecar(ENGINE, KEY, serve_argv(ctx), ctx.env[ENGINE], ping_probe(f"{base}/ping"))
+            # The first job's model is the resident one; later models swap in.
+            return Sidecar(ENGINE, KEY, serve_argv(ctx, job.model.recipe["variant"]), ctx.env[ENGINE], ping_probe(f"{base}/ping"))
 
         sc, load_s = ctx.sidecars.ensure(ENGINE, KEY, make, job.model.vram_gib, lambda st, t: ctx.report("loading", f"{t:.0f} s"))
         # A model switch inside fv-serve (swap) needs the VRAM too.

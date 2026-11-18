@@ -193,7 +193,9 @@ def h3_model_flags(job: Job, s: EngineSettings, knobs: dict[str, Knob], for_serv
         flags["--preview"] = True
     if job.is_explicit("adapter_strength"):
         flags["--adapter-strength"] = float(job.opt("adapter_strength"))
-    if not for_serve:
+    # serve: an engine started normally serves t2va and fl2va from the same
+    # DiT; Ref2VA needs transformer_ref, which only `--task ref2va` loads.
+    if not for_serve or h3_task(job) == "ref2va":
         flags["--task"] = h3_task(job)
     return flags
 

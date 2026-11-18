@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import random
 from pathlib import Path
 from typing import Any
@@ -26,17 +27,64 @@ def serve_supports(info: dict | None, task: str) -> bool:
     return isinstance(tasks, list) and flags.H3_TASK.get(task) in tasks
 
 
-def serve_media_fields(local: dict[str, Any]) -> dict[str, Any]:
-    """The request fields for image / reference inputs when serve advertises
-    the task. One place to adjust once h3-rs settles the shape: local paths,
-    `refs` in the CLI's `kind:path[,audio=path]` form."""
-    out: dict[str, Any] = {}
-    if local.get("first_image"):
-        out["first_image"] = str(local["first_image"])
-    if local.get("last_image"):
-        out["last_image"] = str(local["last_image"])
-    if local.get("references"):
-        out["refs"] = [f"{k}:{p}" + (f",audio={a}" if k == "video" and a else "") for k, p, a in local["references"]]
+SERVE_BODY_MAX = 64 * 1024 * 1024  # h3 serve's cap on a body with media (inputs.max_body_bytes)
+_B64_RATIO = 4 / 3
+
+
+def _b64_file(path: Path) -> str:
+    return base64.b64encode(path.read_bytes()).decode("ascii")
+
+
+def serve_media_bytes(local: dict[str, Any]) -> int:
+    """The decoded size of everything `serve_media_fields` would send; the
+    base64 body is 4/3 of it. Over `SERVE_BODY_MAX` the job runs through the CLI."""
+    n = 0
+    for key in ("first_image", "last_image"):
+        if local.get(key):
+            n += Path(local[key]).stat().st_size
+    for _k, path, audio in local.get("references", []):
+        n += Path(path).stat().st_size + (Path(audio).stat().st_size if audio else 0)
+    if local.get("continue"):
+        y4m, wav = local["continue"]
+        n += Path(y4m).stat().st_size + (Path(wav).stat().st_size if wav else 0)
+    return n
+
+
+def serve_fits(local: dict[str, Any]) -> bool:
+    return serve_media_bytes(local) * _B64_RATIO < SERVE_BODY_MAX * 0.95
+
+
+def serve_media_fields(task: str, local: dict[str, Any]) -> dict[str, Any]:
+    """`h3 serve`'s per-request inputs (h3-rs serve.rs): `task`, `first_image`
+    / `last_image` as {b64, mime}, `refs` as [{kind, b64, mime?, audio_b64?}]
+    (video as Y4M bytes, audio as WAV), `continue` as {b64, audio_b64?}."""
+    out: dict[str, Any] = {"task": flags.H3_TASK[task]}
+    for key in ("first_image", "last_image"):
+        if local.get(key):
+            path = Path(local[key])
+            mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+            out[key] = {"b64": _b64_file(path), "mime": mime}
+    refs = []
+    for kind, path, audio in local.get("references", []):
+        path = Path(path)
+        if kind == "image":
+            mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+            refs.append({"kind": "image", "b64": _b64_file(path), "mime": mime})
+        elif kind == "video":
+            r = {"kind": "video", "b64": _b64_file(path), "mime": "video/x-yuv4mpeg"}
+            if audio:
+                r["audio_b64"] = _b64_file(Path(audio))
+            refs.append(r)
+        else:
+            refs.append({"kind": "audio", "b64": _b64_file(path), "mime": "audio/wav"})
+    if refs:
+        out["refs"] = refs
+    if local.get("continue"):
+        y4m, wav = local["continue"]
+        c = {"b64": _b64_file(Path(y4m))}
+        if wav:
+            c["audio_b64"] = _b64_file(Path(wav))
+        out["continue"] = c
     return out
 
 
@@ -131,12 +179,12 @@ def run(ctx: Ctx, job: Job) -> RunResult:
             # serve cannot take it: stop it so the CLI has the VRAM.
             sc.stop()
             ctx.sidecars.sidecars.pop(ENGINE, None)
-    if not serve_supports(info, job.task):
+    if not serve_supports(info, job.task) or not serve_fits(local):
         return _run_cli(ctx, job, flags.h3_generate_argv(job, s, ctx.knobs, local, out, seed), out, seed, command)
     sc, load_s = ctx.sidecars.ensure(ENGINE, key, make, job.model.vram_gib, _loading(ctx))
     body: dict[str, Any] = {"prompt": job.prompt, "width": job.width, "height": job.height, "frames": job.frames,
                             "seed": seed, "upscale": job.upscale if job.upscale else False}
-    body.update(serve_media_fields(local))
+    body.update(serve_media_fields(job.task, local))
     clip = run_serve_job(base, sc, body, ctx.job_dir, ctx.report, want_audio=job.model.audio)
     ctx.report("muxing", "frames → y4m", force=True)
     fps = job.fps_for()

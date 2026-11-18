@@ -82,11 +82,12 @@ def worker_env(tmp_path_factory, binaries, fake_runpod):
         "STUDIO_KEEP_JOB_DIRS": "1",
     }
     # Fake volume trees so staging is a no-op link.
-    for t in ("h3-8step", "h3-8step-mxfp8", "fastwan", "auxiliary/tae", "fastwan22-ti2v-5b"):
+    for t in ("h3-8step", "h3-8step-mxfp8", "fastwan", "auxiliary/tae", "fastwan22-ti2v-5b",
+              "h3-base/transformer", "h3-base/text_encoder", "h3-base/tokenizer", "h3-base/vae", "h3-base/audio_vae", "h3-ref2va"):
         (root / "volume" / "weights" / t).mkdir(parents=True)
     for f in ("auxiliary/tae/taew2_1.safetensors", "auxiliary/tae/taew2_2.safetensors"):
         (root / "volume" / "weights" / f).write_bytes(b"\x00" * 16)
-    for t in ("tables",):
+    for t in ("tables", "plug4"):
         (root / "volume" / "h3-rs" / t).mkdir(parents=True)
     (root / "stage" / "fastwan").mkdir(parents=True)
     (root / "stage" / "fastwan" / ".complete").write_text("{}\n")
@@ -159,6 +160,30 @@ def test_h3_synthetic_generate(worker_env, fake_runpod):
         assert out["audio_url"] and out["thumbnail_url"]
     else:
         pytest.skip("ffmpeg missing: the mux assertion is skipped")
+
+
+def test_h3_fl2v_runs_through_the_resident_serve(worker_env, fake_runpod):
+    """h3 serve takes first_image / last_image per request (h3-rs serve-inputs);
+    the job must not fall back to the per-job CLI."""
+    import base64, struct, zlib
+
+    def png(w, h, rgb):
+        raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+        def chunk(t, d):
+            return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+    h, fake, root = worker_env
+    fake_runpod.updates.clear()
+    first = {"b64": base64.b64encode(png(64, 32, (200, 30, 30))).decode(), "mime": "image/png"}
+    last = {"b64": base64.b64encode(png(64, 32, (30, 30, 200))).decode(), "mime": "image/png"}
+    out = run_job(h, fake_runpod, "h3-fl2v", {"engine": "h3", "model": "h3-plug4", "task": "fl2v", "prompt": "a fox", "width": 480, "height": 272,
+                                             "frames": 124, "seed": 3, "inputs": {"first_image": first, "last_image": last}})
+    assert "error" not in out, out
+    assert out["task"] == "fl2v" and out["frames"] == 124
+    details = [d.get("detail") or "" for _, d in fake_runpod.updates]
+    assert not any("per-job CLI" in d for d in details), details
+    assert "--task fl2va" in out["command"] and "--first-image" in out["command"]
 
 
 def test_h3_sidecar_is_reused_and_survives_a_crash(worker_env, fake_runpod):

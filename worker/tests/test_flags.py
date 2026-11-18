@@ -103,8 +103,11 @@ def test_h3_serve_line_and_key(catalog):
     assert argv[:6] == ["h3", "serve", "--backend", "cuda", "--addr", "127.0.0.1:7861"]
     assert "--max-frames" in argv and argv[argv.index("--max-frames") + 1] == "362"
     assert argv[argv.index("--upscale") + 1] == S.esrgan
-    assert "--task" not in argv
+    assert "--task" not in argv  # t2va and fl2va come from the same resident DiT
     assert flags.h3_serve_key(j, S, catalog.knobs) == flags.h3_serve_key(catalog.validate({"engine": "h3", "model": "fasth3-v2", "prompt": "Q", "upscale": 2}), S, catalog.knobs)
+    r = catalog.validate({"engine": "h3", "model": "h3-turbo4-ref", "task": "ref2v", "prompt": "P", "inputs": {"references": [{"url": "https://e/a.png"}]}})
+    rargv = flags.h3_serve_argv(r, S, catalog.knobs, 7861)
+    assert rargv[rargv.index("--task") + 1] == "ref2va"  # Ref2VA serve holds transformer_ref
     assert flags.h3_serve_key(j, S, catalog.knobs) != flags.h3_serve_key(catalog.validate({"engine": "h3", "model": "fasth3-v1", "prompt": "P"}), S, catalog.knobs)
 
 

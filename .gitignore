@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 .wrangler/
 studio/docs/*.mp4
+.runpod-endpoint.json
+backstop.log

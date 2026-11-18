@@ -3,6 +3,8 @@
 #   stage 1: build `h3` (h3-rs) and `fastwan` (fastwan-rs) with --features cuda
 #            (cudarc dynamic loading: no CUDA toolkit at build time);
 #   stage 2: the fastvideo-rs serve image (fv-serve, fv-boot, CUDA 13.4 libs,
+#            pinned to :cuda-latest's amd64 digest of 2026-11-18, since
+#            :cuda-stable does not exist until fastvideo-rs promotes a release;
 #            ffmpeg with libx264 + aac at /usr/local/bin) plus a venv with the
 #            runpod SDK, boto3 and the CUDA 12.8 runtime wheels whose libraries
 #            are linked into /opt/cuda12/lib (LD_LIBRARY_PATH for h3 / fastwan
@@ -12,7 +14,7 @@
 #     --build-arg H3_REF=<sha> --build-arg FASTWAN_REF=<sha> \
 #     --secret id=repo_token,env=REPO_READ_TOKEN -t fastvideo-studio-worker .
 
-ARG FV_SERVE_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable
+ARG FV_SERVE_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:aa2a46574879f51544bad5da6d34cf643835d25e1cc6b09417907581ac3fc699
 ARG RUST_IMAGE=rust:1.97-bookworm
 
 # ---- stage 1: the two engine binaries ---------------------------------------

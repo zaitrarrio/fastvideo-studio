@@ -152,16 +152,23 @@ clones private repositories; it never lands in a layer.
 
 ## RunPod
 
-`scripts/runpod/endpoint.py` (REST v1 with `RUNPOD_API_KEY`): `template`,
-`up`, `down`, `status`, `health`, `run '<json>'`, `cancel <id>`, `smoke`
-(op info + one 480p draft each on h3, fastwan and fastvideo, timed),
-`backstop <minutes>` (a detached timer that runs `down`), `plan` (prints
-both bodies without calling). Money guards as in fastvideo-rs: workers 0 / 1,
-idle timeout 5 s, FlashBoot off, execution timeout 30 min, the backstop.
-Secrets are referenced as `{{ RUNPOD_SECRET_fv_r2_* }}` in the template env.
-Size `STUDIO_CONTAINER_DISK_GB` for the staged trees (the V2 recipe stages
-~103 GB; h3-base's `transformer` ~100 GB more for the base / plug / turbo
-recipes).
+`scripts/runpod/endpoint.py` (REST v2, `api.runpod.io/v2`, with
+`RUNPOD_API_KEY`): `gpus` (the catalog: id, pool, memory, serverless $/h),
+`plan` (prints the create body without calling), `up` (checks the pool
+and the name, creates, writes `.runpod-endpoint.json`), `list`, `status`,
+`health`, `down --yes`, `run '<json>'`, `cancel <id>`, `smoke` (op info +
+one 480p draft each on h3, fastwan and fastvideo, timed), `backstop
+<minutes>` (a detached timer that runs `down --yes`); `template` is a
+no-op (v2 endpoints take the image directly). GPUs are chosen by pool
+(`BLACKWELL_96` minus the Max-Q edition by default) and a private ghcr
+image needs a registry credential (`--registry-name 'fv-ghcr-*'`). Money
+guards as in fastvideo-rs: workers 0 / 1 (`--i-know` for more), idle
+timeout 5 s, FlashBoot off, request timeout 30 min, the backstop. Secrets
+are referenced as `{{ RUNPOD_SECRET_fv_r2_* }}` in the endpoint env. Size
+`STUDIO_CONTAINER_DISK_GB` / `--disk` for the staged trees (the V2 recipe
+stages ~103 GB; h3-base's `transformer` ~100 GB more for the base / plug /
+turbo recipes). `cd worker && python3 -m pytest -q tests/test_endpoint_script.py`
+checks the bodies and the guards against fake v2 responses.
 
 ## Catalog notes
 

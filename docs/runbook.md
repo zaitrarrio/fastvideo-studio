@@ -31,17 +31,36 @@ binaries' `--version` / `--help` heads.
 
 ## 2. Create the endpoint
 
+RunPod's REST v2 (`https://api.runpod.io/v2`, bearer `RUNPOD_API_KEY`;
+`rest.runpod.io` v1 no longer resolves). A v2 endpoint takes the image
+directly (no template), chooses GPUs by **pool** (`gpus` lists the catalog:
+the RTX PRO 6000 family is `BLACKWELL_96`, the RTX 5090 `ADA_32_PRO`) minus
+excluded type ids, and pulls a private ghcr image through a
+container-registry credential (`registry`; the account's are named
+`fv-ghcr-<timestamp>`, `--registry-name 'fv-ghcr-*'` picks the newest).
+
 ```bash
 export RUNPOD_API_KEY=…
 export STUDIO_IMAGE=ghcr.io/zaitrarrio/fastvideo-studio-worker:sha-<sha>
-python3 scripts/runpod/endpoint.py up --name studio --gpu "NVIDIA RTX PRO 6000 Blackwell Server Edition" --disk 300
-python3 scripts/runpod/endpoint.py backstop --minutes 180   # deletes the endpoint later, whatever happens
+python3 scripts/runpod/endpoint.py gpus --pool BLACKWELL_96        # ids and serverless $/h in the pool
+python3 scripts/runpod/endpoint.py plan --registry-name 'fv-ghcr-*' # the create body, nothing sent
+python3 scripts/runpod/endpoint.py up --name studio --disk 300 --registry-name 'fv-ghcr-*'
+python3 scripts/runpod/endpoint.py backstop 180                     # `down --yes` later, whatever happens
 ```
 
-Defaults: workers 0 / 1, idle 5 s, FlashBoot off, execution timeout 30 min,
-`minCudaVersion 13.0` (fv-serve's floor), volume `bz0ofkfx45` in EU-RO-1.
-The 300 GB container disk is for staging (h3 V2 recipe 103 GB, base MXFP8
-+ text side ~60 GB, FastWan ~15 GB, fastvideo-rs trees as needed).
+`up` first checks the pool against `GET /v2/catalog/gpus` (printing each
+GPU id and its serverless price), refuses a name that an endpoint already
+carries (prints its id), prints the body, POSTs `/v2/serverless`, prints
+the id and `requestUrls`, and writes `.runpod-endpoint.json` (id, name,
+createdAt, image) in the working directory; `status`, `health`, `down`
+and `backstop` read it (or `--id`). Defaults: workers 0 / 1 (more needs
+`--i-know`), idle 5 s, FlashBoot off (`--flashboot` turns it on), request
+timeout 30 min, `minCudaVersion 13.0` (fv-serve's floor), pool
+`BLACKWELL_96` minus the Max-Q Workstation Edition (`--exclude`, repeatable;
+`--exclude ''` for none), volume `bz0ofkfx45` mounted at `/runpod-volume`
+in EU-RO-1. The 300 GB container disk is for staging (h3 V2 recipe 103 GB,
+base MXFP8 + text side ~60 GB, FastWan ~15 GB, fastvideo-rs trees as
+needed). Extra worker env goes in with `--env K=V`.
 
 ## 3. Smoke
 
@@ -83,7 +102,7 @@ The endpoint's `op: info` is under the session panel.
 ## 5. Tear down
 
 ```bash
-python3 scripts/runpod/endpoint.py down
+python3 scripts/runpod/endpoint.py down --yes
 ```
 
 Outputs in R2 expire by URL only; prune `jobs/` with a lifecycle rule.

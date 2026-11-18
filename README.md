@@ -7,7 +7,7 @@ drives it.
 |---|---|---|
 | Catalog | `catalog/catalog.json` | Every model the endpoint serves: engine, tasks, sizes, frame grid, knobs, recipe, weight trees. The one contract the worker and the page share. |
 | Worker | `worker/` | The RunPod queue handler: dispatches a job to `h3` (h3-rs), `fastwan` (fastwan-rs) or `fv-serve` (fastvideo-rs), keeps the engines resident, stages weights, muxes MP4s, uploads to R2. One image, `ghcr.io/zaitrarrio/fastvideo-studio-worker`. |
-| Endpoint tooling | `scripts/runpod/endpoint.py` | Create / smoke / run / tear down the endpoint through RunPod's REST API, with the money guards the engines' repos use. |
+| Endpoint tooling | `scripts/runpod/endpoint.py` | Create / smoke / run / tear down the endpoint through RunPod's REST API v2, with the money guards the engines' repos use. |
 | Studio | `studio/` | A Cloudflare Worker (holds the RunPod key, proxies jobs, takes uploads into R2) and the page: Prompt Studio's layout and tokens, one form generated from the catalog. |
 | Docs | `docs/design.md`, `docs/jobs.md`, `docs/runbook.md` | Architecture and invariants, the job schema, how to deploy and verify. |
 

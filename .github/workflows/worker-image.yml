@@ -1,6 +1,8 @@
 # Builds and pushes ghcr.io/zaitrarrio/fastvideo-studio-worker (worker/Dockerfile):
 # `h3` (h3-rs) and `fastwan` (fastwan-rs) built at pinned commits on top of
-# ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable. Tags: sha-<sha> and
+# ghcr.io/zaitrarrio/fastvideo-rs-serve (the Dockerfile pins :cuda-latest's
+# amd64 digest; :cuda-stable does not exist until fastvideo-rs promotes a
+# release). Tags: sha-<sha> and
 # latest on main. Secrets: GITHUB_TOKEN pushes to ghcr; REPO_READ_TOKEN (a
 # read token for the three repositories when they are private) is passed to
 # the build as a Docker secret, never in a layer.
@@ -24,7 +26,7 @@ on:
         required: false
         default: ""
       fv_serve_image:
-        description: "base image (default ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable; use :cuda-latest before the first promotion)"
+        description: "base image (default: the Dockerfile's digest pin of fastvideo-rs-serve:cuda-latest)"
         required: false
         default: ""
       push:

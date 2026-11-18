@@ -1,0 +1,100 @@
+# Builds and pushes ghcr.io/zaitrarrio/fastvideo-studio-worker (worker/Dockerfile):
+# `h3` (h3-rs) and `fastwan` (fastwan-rs) built at pinned commits on top of
+# ghcr.io/zaitrarrio/fastvideo-rs-serve (the Dockerfile pins :cuda-latest's
+# amd64 digest; :cuda-stable does not exist until fastvideo-rs promotes a
+# release). Tags: sha-<sha> and
+# latest on main. Secrets: GITHUB_TOKEN pushes to ghcr; REPO_READ_TOKEN (a
+# read token for the three repositories when they are private) is passed to
+# the build as a Docker secret, never in a layer.
+name: worker-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - "catalog/catalog.json"
+      - ".github/workflows/worker-image.yml"
+  workflow_dispatch:
+    inputs:
+      h3_ref:
+        description: "h3-rs commit / branch to build (default: the Dockerfile's pin)"
+        required: false
+        default: ""
+      fastwan_ref:
+        description: "fastwan-rs commit / branch to build (default: the Dockerfile's pin)"
+        required: false
+        default: ""
+      fv_serve_image:
+        description: "base image (default: the Dockerfile's digest pin of fastvideo-rs-serve:cuda-latest)"
+        required: false
+        default: ""
+      push:
+        description: "push the image"
+        type: boolean
+        default: true
+
+env:
+  IMAGE: ghcr.io/zaitrarrio/fastvideo-studio-worker
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests (no engines needed)
+        run: |
+          python3 -m pip install --quiet pytest
+          cd worker && python3 -m pytest -q tests -m "not e2e"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr
+        if: ${{ github.event_name == 'push' || inputs.push }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build args
+        id: args
+        run: |
+          args=""
+          [ -n "${{ inputs.h3_ref }}" ] && args="$args
+          H3_REF=${{ inputs.h3_ref }}"
+          [ -n "${{ inputs.fastwan_ref }}" ] && args="$args
+          FASTWAN_REF=${{ inputs.fastwan_ref }}"
+          [ -n "${{ inputs.fv_serve_image }}" ] && args="$args
+          FV_SERVE_IMAGE=${{ inputs.fv_serve_image }}"
+          {
+            echo "args<<EOF"
+            echo "STUDIO_IMAGE=${IMAGE}:sha-${GITHUB_SHA::7}"
+            echo "$args"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "tags=${IMAGE}:sha-${GITHUB_SHA::7}$( [ "${{ github.ref }}" = "refs/heads/main" ] && echo ",${IMAGE}:latest" )" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: worker/Dockerfile
+          push: ${{ github.event_name == 'push' || inputs.push }}
+          tags: ${{ steps.args.outputs.tags }}
+          build-args: ${{ steps.args.outputs.args }}
+          secrets: |
+            repo_token=${{ secrets.REPO_READ_TOKEN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Record
+        run: |
+          echo "built ${{ steps.args.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "h3-rs / fastwan-rs refs: ${{ inputs.h3_ref || 'Dockerfile pin' }} / ${{ inputs.fastwan_ref || 'Dockerfile pin' }}" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,147 @@
+# fv-serve for the fastvideo-studio worker (docs/design.md §1).
+#
+# Started directly by handler.py (not through fv-boot): the handler links the
+# volume and stages the weights itself and sets FV_WEIGHTS=/workspace/w and
+# FV_STATE_DIR. One process serves every fastvideo catalog model: `[engine]
+# swap = true` with every variant non-resident, so a job for another model
+# unloads the resident DiT and loads the requested one from the local disk.
+# Bound to loopback with no auth: only the handler on this container talks
+# to it. Artifacts stay on the container disk (`local`), jobs in memory.
+# This file is generated from catalog/catalog.json (the fastvideo models);
+# regenerate it when the catalog changes: worker/configs/gen_fastvideo_toml.py.
+
+[server]
+bind = "127.0.0.1:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "none"
+
+[artifacts]
+backend = "local"
+url_ttl_s = 86400
+
+[jobs]
+backend = "memory"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+swap = true
+
+# MiniMax-H3 Turbo (fastvideo-rs) · 4 steps (fv-h3; trees: weights/h3-base, weights/FastH3-4-step-Preview-v1-LoRA)
+[[models]]
+variant = "fasth3-4step-vsa"
+resident = false
+
+# MiniMax-H3 Max (fastvideo-rs) (fv-h3; trees: weights/h3-base, weights/FastH3-4-step-Preview-v1-LoRA)
+[[models]]
+variant = "sol-h3"
+resident = false
+
+# MiniMax-H3 Draft (fastvideo-rs) · 480p TAEH3 (fv-h3; trees: weights/h3-base, weights/FastH3-4-step-Preview-v1-LoRA, weights/auxiliary/tae/taeh3.safetensors)
+[[models]]
+variant = "fasth3-4step-vsa-480p-taeh3"
+resident = false
+
+# MiniMax-H3 Ref2V Turbo (fastvideo-rs) (fv-h3; trees: weights/h3-base, weights/h3-ref2va)
+[[models]]
+variant = "h3-ref2v-turbo"
+resident = false
+
+# MiniMax-H3 Ref2V Max (fastvideo-rs) (fv-h3; trees: weights/h3-base, weights/h3-ref2va)
+[[models]]
+variant = "h3-ref2v-max"
+resident = false
+
+# MiniMax-H3 Trim NVFP4 (fastvideo-rs) (fv-h3; trees: weights/h3-base, weights/fasth3-trim-8step, weights/fasth3-trim-8step-nvfp4)
+[[models]]
+variant = "fasth3-trim-nvfp4"
+resident = false
+
+# FastH3 V2 NVFP4 (fastvideo-rs) (fv-h3; trees: weights/h3-base, weights/fasth3-v2-nvfp4)
+[[models]]
+variant = "fasth3-v2-nvfp4"
+resident = false
+
+# MiniMax-H3 Turbo LightX2V (fastvideo-rs) (fv-h3; trees: weights/h3-base, weights/h3-turbo-loras/lightx2v)
+[[models]]
+variant = "h3-lightx2v-turbo"
+resident = false
+
+# LTX-2.5 Turbo (distilled, Sol) (ltx; trees: weights/ltx25)
+[[models]]
+variant = "ltx25-distill-sol"
+resident = false
+
+# LTX-2.5 Max (distilled, dense) (ltx; trees: weights/ltx25)
+[[models]]
+variant = "ltx25-distill-dense"
+resident = false
+
+# LTX-2.5 Draft (NVFP4, TAEHV) (ltx; trees: weights/ltx25, weights/auxiliary/tae/taeltx2_3_wide.safetensors)
+[[models]]
+variant = "ltx25-distill-sol-nvfp4-taehv"
+resident = false
+
+# LTX-2.5 Reference (IC-LoRA) (ltx; trees: weights/ltx25, weights/ltx25-ic-lora-ingredients)
+[[models]]
+variant = "ltx25-ref2v"
+resident = false
+
+# LTX-2.5 Audio-to-video (guided) (ltx; trees: weights/ltx25, weights/ltx25-dev)
+[[models]]
+variant = "ltx25-a2v-guided"
+resident = false
+
+# FastWan 2.2 TI2V 5B · turbo (wan; trees: weights/fastwan22-ti2v-5b)
+[[models]]
+variant = "fastwan22-ti2v-5b"
+resident = false
+
+# Wan 2.2 TI2V 5B · max (wan; trees: weights/wan22-ti2v-5b)
+[[models]]
+variant = "wan22-ti2v-5b"
+resident = false
+
+# FastWan 2.2 5B Draft (TAEHV) (wan; trees: weights/fastwan22-ti2v-5b, weights/auxiliary/tae/taew2_2.safetensors)
+[[models]]
+variant = "fastwan22-ti2v-5b-taehv"
+resident = false
+
+# Wan 2.1 14B · LongLive-Plug 4 steps (wan; trees: weights/wan21-t2v-14b, weights/longlive-plug/wan21-t2v-14b-few-step, weights/longlive-plug/wan21-t2v-14b-cfg)
+[[models]]
+variant = "wan14b-plug-4step"
+resident = false
+
+# FastWan 2.1 1.3B (fastvideo-rs) (wan; trees: weights/fastwan21-1.3b)
+[[models]]
+variant = "fastwan21-1.3b"
+resident = false
+
+# Self-Forcing 1.3B (fastvideo-rs) (wan; trees: weights/sfwan21-1.3b, weights/auxiliary/tae/taew2_1.safetensors)
+[[models]]
+variant = "sfwan21-1.3b"
+resident = false
+
+# LongLive 1.3B (non-commercial) (wan; trees: weights/sfwan21-1.3b, weights/longlive-1.3b-safetensors, weights/auxiliary/tae/taew2_1.safetensors)
+[[models]]
+variant = "longlive-1.3b"
+resident = false
+
+[protocols]
+native = true
+openai_videos = false
+fastwan = false
+minimax = false
+fal = false
+fal_director = false
+ltx = false
+reactor = false
+
+[limits]
+queue_max = 4
+body_max_mb = 64

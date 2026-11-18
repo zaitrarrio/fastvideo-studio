@@ -64,8 +64,13 @@ RUN python3 -m venv /opt/studio/venv \
  && for d in cublas cuda_nvrtc nvjitlink; do \
       for f in /opt/studio/venv/lib/python3*/site-packages/nvidia/$d/lib/*.so*; do ln -sf "$f" /opt/cuda12/lib/; done; done \
  && cd /opt/cuda12/lib \
+ # The soname links the wheels leave out: libnvrtc ships libnvrtc.so.12 itself (a
+ # link to that name onto itself was a loop), libcublas ships libcublas.so.12.x.y;
+ # every name points at the real file.
  && for n in libcublas libcublasLt libnvrtc libnvJitLink; do \
-      so="$(ls -1 $n.so.12* 2>/dev/null | head -1)"; [ -n "$so" ] && ln -sf "$so" "$n.so" && ln -sf "$so" "$n.so.12"; \
+      real="$(ls -1 $n.so.12* 2>/dev/null | sort -V | tail -1)"; [ -n "$real" ] || { echo "missing $n"; exit 1; }; \
+      target="$(readlink -f "$real")"; \
+      [ -e "$n.so.12" ] || ln -s "$target" "$n.so.12"; ln -sfn "$target" "$n.so"; \
     done \
  && ls -l /opt/cuda12/lib \
  && test -e /opt/cuda12/lib/libcublasLt.so.12 && test -e /opt/cuda12/lib/libnvrtc.so.12 \

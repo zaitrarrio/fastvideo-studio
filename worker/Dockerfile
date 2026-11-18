@@ -19,8 +19,8 @@ ARG RUST_IMAGE=rust:1.97-bookworm
 FROM ${RUST_IMAGE} AS engines
 ARG H3_REPO=https://github.com/zaitrarrio/h3-rs.git
 ARG FASTWAN_REPO=https://github.com/zaitrarrio/fastwan-rs.git
-# Pinned commits of branch claude/wizardly-clarke-1a2jta at the time of writing.
-ARG H3_REF=55238c5ebeabd2aed35b97e7a62dfe2efff0d747
+# Pinned commits of branch claude/wizardly-clarke-1a2jta (h3-rs: serve takes keyframe / reference inputs per request).
+ARG H3_REF=e029781510585f8fc5b88cae71bcd8a6cddd26fc
 ARG FASTWAN_REF=74c27bb1de3b0862175889caab6da10704fedbe9
 RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config libssl-dev clang \
  && rm -rf /var/lib/apt/lists/*

@@ -15,7 +15,7 @@ not_found_handling = "none"
 # uploads/<yyyy-mm>/<random>-<name>; the endpoint's worker reads them back.
 [[r2_buckets]]
 binding = "UPLOADS"
-bucket_name = "fastvideo-studio-uploads"
+bucket_name = "fastvideo-studio"
 
 [vars]
 # Shown in the header next to the endpoint status.

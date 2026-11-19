@@ -197,39 +197,42 @@ pub fn serve_argv(ctx: &Ctx, variant: Option<&str>) -> JobResult<Vec<String>> {
     ])
 }
 
-pub fn run(ctx: &Ctx, job: &Job) -> JobResult<RunResult> {
+/// The resident `fv-serve` for `model`'s process group (started when it is
+/// not up: the group's config with `model` resident), its base URL and the
+/// load it cost. Jobs and the pod's live streams / segments share it.
+pub fn ensure_serve(
+    ctx: &Ctx,
+    model: &crate::catalog::Model,
+) -> JobResult<(String, Option<Sidecar>, f64)> {
     let port = ctx.port(ENGINE);
     let base = format!("http://127.0.0.1:{port}");
-    let mut load_s = 0.0;
-    let variant = job
-        .model
-        .recipe
-        .get("variant")
-        .map(py_str)
-        .unwrap_or_default();
-    let key = format!("{KEY}:{}", process_of(&job.model)); // one fv-serve per process group (a family: its models swap inside it)
-    let mut sc: Option<Sidecar> = None;
-    if !ctx.fv_fake {
-        let argv = serve_argv(ctx, Some(&variant))?;
-        let env = ctx.env_of(ENGINE);
-        let make = || {
-            Sidecar::new(
-                ENGINE,
-                &key,
-                argv.clone(),
-                env.clone(),
-                ping_probe(&format!("{base}/ping")),
-            )
-        };
-        let loading = |_: &str, t: f64| ctx.report.detail("loading", &format!("{t:.0} s"));
-        let (s, l) =
-            ctx.sidecars
-                .ensure(ENGINE, &key, &make, job.model.vram_gib, Some(&loading))?;
-        // A model switch inside fv-serve (swap) needs the VRAM too.
-        ctx.sidecars.make_room(ENGINE, job.model.vram_gib);
-        sc = Some(s);
-        load_s = l;
+    if ctx.fv_fake {
+        return Ok((base, None, 0.0));
     }
+    let variant = model.recipe.get("variant").map(py_str).unwrap_or_default();
+    let key = format!("{KEY}:{}", process_of(model)); // one fv-serve per process group (a family: its models swap inside it)
+    let argv = serve_argv(ctx, Some(&variant))?;
+    let env = ctx.env_of(ENGINE);
+    let make = || {
+        Sidecar::new(
+            ENGINE,
+            &key,
+            argv.clone(),
+            env.clone(),
+            ping_probe(&format!("{base}/ping")),
+        )
+    };
+    let loading = |_: &str, t: f64| ctx.report.detail("loading", &format!("{t:.0} s"));
+    let (s, l) = ctx
+        .sidecars
+        .ensure(ENGINE, &key, &make, model.vram_gib, Some(&loading))?;
+    // A model switch inside fv-serve (swap) needs the VRAM too.
+    ctx.sidecars.make_room(ENGINE, model.vram_gib);
+    Ok((base, Some(s), l))
+}
+
+pub fn run(ctx: &Ctx, job: &Job) -> JobResult<RunResult> {
+    let (base, sc, load_s) = ensure_serve(ctx, &job.model)?;
     let tail = |sc: &Option<Sidecar>| sc.as_ref().map(|s| s.tail(TAIL)).unwrap_or_default();
     let urls = media_urls(ctx, job)?;
     let body = Value::Object(flags::fastvideo_body(job, ctx.knobs, &urls, job.seed)?);

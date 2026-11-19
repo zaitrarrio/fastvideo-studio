@@ -480,6 +480,9 @@ pub fn make_mp4(
 pub struct FvState {
     pub jobs: Map<String, Value>,
     pub requests: Vec<Value>,
+    /// Live streams (`/fv/v1/streams`): id → the stream object.
+    pub streams: Map<String, Value>,
+    pub commands: Vec<(String, Value)>,
 }
 
 /// A tiny fake of fv-serve's native jobs API (`/ping`, `/fv/v1/capabilities`,
@@ -546,6 +549,81 @@ impl FakeFvServe {
                     200,
                     &json!({"auth": {"mode": "none"}, "protocols": ["native"], "models": []}),
                 ),
+                (Method::Post, "/fv/v1/streams") => {
+                    let body: Value = serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
+                    let mut s = st.lock().unwrap();
+                    s.requests.push(body.clone());
+                    let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                    if model.is_empty() || body.get("prompt").and_then(|p| p.as_str()).unwrap_or("").is_empty() {
+                        drop(s);
+                        respond_json(req, 400, &json!({"error": {"kind": "invalid_request", "message": "model and prompt are required"}}));
+                        return;
+                    }
+                    if s.streams.values().any(|v| v["status"]["state"] == "running") {
+                        drop(s);
+                        respond_json(req, 429, &json!({"error": {"kind": "busy", "message": "a streaming session holds this GPU"}}));
+                        return;
+                    }
+                    let id = format!("fvstream_{}", s.streams.len() + 1);
+                    let mode = if model.starts_with("sfwan") || model.starts_with("longlive") { "causal" } else { "clip" };
+                    let obj = json!({
+                        "id": id, "model": model, "mode": mode,
+                        "status": {"state": "running", "output_state": "publishing"},
+                        "output": {"kind": body["output"]["kind"].as_str().unwrap_or("cloudflare"), "credentials": "set"},
+                        "playback": {"whep_url": format!("https://customer-x.cloudflarestream.com/{id}/webRTC/play")},
+                        "session": {"prompt": body["prompt"]},
+                    });
+                    s.streams.insert(id.clone(), obj.clone());
+                    drop(s);
+                    respond_json(req, 201, &obj);
+                }
+                (Method::Get, "/fv/v1/streams") => {
+                    let s = st.lock().unwrap();
+                    let data: Vec<Value> = s.streams.values().cloned().collect();
+                    drop(s);
+                    respond_json(req, 200, &json!({"data": data}));
+                }
+                (m, p) if p.starts_with("/fv/v1/streams/") => {
+                    let rest = &p["/fv/v1/streams/".len()..];
+                    let (sid, action) = match rest.split_once('/') {
+                        Some((a, b)) => (a.to_string(), Some(b.to_string())),
+                        None => (rest.to_string(), None),
+                    };
+                    let mut s = st.lock().unwrap();
+                    let Some(mut obj) = s.streams.get(&sid).cloned() else {
+                        drop(s);
+                        respond_json(req, 404, &json!({"error": {"kind": "not_found", "message": "no such stream"}}));
+                        return;
+                    };
+                    match (m, action.as_deref()) {
+                        (Method::Get, None) => {
+                            drop(s);
+                            respond_json(req, 200, &obj);
+                        }
+                        (Method::Post, Some("commands")) => {
+                            let body: Value = serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
+                            let t = body["type"].as_str().unwrap_or("").to_string();
+                            s.commands.push((sid.clone(), body.clone()));
+                            if t == "set_prompt" || t == "enqueue" {
+                                obj["session"]["prompt"] = body["data"]["prompt"].clone();
+                            }
+                            s.streams.insert(sid, obj);
+                            drop(s);
+                            respond_json(req, 200, &json!({"reply": {"ok": true, "type": t}}));
+                        }
+                        (Method::Delete, None) => {
+                            obj["status"]["state"] = json!("closed");
+                            obj["status"]["output_state"] = json!("ended");
+                            s.streams.insert(sid, obj);
+                            drop(s);
+                            respond_bytes(req, 204, Vec::new(), "");
+                        }
+                        _ => {
+                            drop(s);
+                            respond_json(req, 405, &json!({"error": {"kind": "method", "message": "no"}}));
+                        }
+                    }
+                }
                 (Method::Get, p) if p.starts_with("/fv/v1/jobs/") => {
                     let jid = p.rsplit('/').next().unwrap().to_string();
                     let mut s = st.lock().unwrap();

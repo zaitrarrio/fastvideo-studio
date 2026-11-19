@@ -836,6 +836,32 @@ impl Worker {
         result
     }
 
+    /// The resident `fv-serve` for a fastvideo catalog model (started when
+    /// it is not up), for the pod's live streams and segments
+    /// (docs/pod-mode.md): its base URL and the load it cost.
+    pub fn fastvideo_serve(
+        &self,
+        model_id: &str,
+        progress: Option<ProgressFn>,
+    ) -> JobResult<(String, f64)> {
+        let model = self.catalog.model("fastvideo", model_id).ok_or_else(|| {
+            JobError::validate(format!(
+                "unknown fastvideo model {}",
+                crate::py::py_str_repr(model_id)
+            ))
+        })?;
+        let report = Reporter::new(progress, "fastvideo", &model.id);
+        let engine_env: EngineEnv = ["h3", "fastwan", "fastvideo"]
+            .iter()
+            .map(|e| (e.to_string(), self.env_for(e)))
+            .collect();
+        let dir = self.cfg.jobs_dir.join("streams");
+        std::fs::create_dir_all(&dir)?;
+        let ctx = self.ctx(dir, &engine_env, &report);
+        let (base, _sc, load_s) = fastvideo::ensure_serve(&ctx, model)?;
+        Ok((base, load_s))
+    }
+
     fn ctx<'a>(
         &'a self,
         job_dir: PathBuf,

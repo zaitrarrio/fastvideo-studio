@@ -3,6 +3,9 @@
 //! job that fails validation exercise the queue, the status shapes, auth
 //! and cancel.
 
+mod common;
+
+use common::FakeFvServe;
 use fvstudio::serve::{serve, ServeConfig};
 use fvstudio::worker::Worker;
 use serde_json::{json, Value};
@@ -15,12 +18,24 @@ fn env_map(dir: &std::path::Path) -> HashMap<String, String> {
     let mut e = HashMap::new();
     e.insert(
         "STUDIO_CATALOG".into(),
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../catalog/catalog.json").to_string_lossy().into_owned(),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../catalog/catalog.json")
+            .to_string_lossy()
+            .into_owned(),
     );
-    e.insert("STUDIO_R2_LOCAL_DIR".into(), dir.join("r2").to_string_lossy().into_owned());
+    e.insert(
+        "STUDIO_R2_LOCAL_DIR".into(),
+        dir.join("r2").to_string_lossy().into_owned(),
+    );
     e.insert("STUDIO_R2_BUCKET".into(), "studio-test".into());
-    e.insert("STUDIO_VOLUME".into(), dir.join("vol").to_string_lossy().into_owned());
-    e.insert("STUDIO_JOBS_DIR".into(), dir.join("jobs").to_string_lossy().into_owned());
+    e.insert(
+        "STUDIO_VOLUME".into(),
+        dir.join("vol").to_string_lossy().into_owned(),
+    );
+    e.insert(
+        "STUDIO_JOBS_DIR".into(),
+        dir.join("jobs").to_string_lossy().into_owned(),
+    );
     e.insert("STUDIO_SERVE_BIND".into(), "127.0.0.1:0".into());
     e.insert("STUDIO_SERVE_TOKEN".into(), "pod-token".into());
     e.insert("STUDIO_POD_HOURS".into(), "1".into());
@@ -52,7 +67,11 @@ impl Pod {
             assert!(t0.elapsed() < Duration::from_secs(10), "serve did not bind");
             std::thread::sleep(Duration::from_millis(20));
         };
-        Pod { base, stop, thread: Some(thread) }
+        Pod {
+            base,
+            stop,
+            thread: Some(thread),
+        }
     }
 
     fn call(&self, method: &str, path: &str, body: Option<Value>, auth: bool) -> (u16, Value) {
@@ -62,7 +81,9 @@ impl Pod {
             r = r.set("Authorization", "Bearer pod-token");
         }
         let resp = match body {
-            Some(b) => r.set("Content-Type", "application/json").send_string(&b.to_string()),
+            Some(b) => r
+                .set("Content-Type", "application/json")
+                .send_string(&b.to_string()),
             None => r.call(),
         };
         let parse = |resp: ureq::Response| -> (u16, Value) {
@@ -82,10 +103,16 @@ impl Pod {
         loop {
             let (code, s) = self.call("GET", &format!("/jobs/{id}"), None, true);
             assert_eq!(code, 200, "{s}");
-            if matches!(s["status"].as_str(), Some("COMPLETED" | "FAILED" | "CANCELLED")) {
+            if matches!(
+                s["status"].as_str(),
+                Some("COMPLETED" | "FAILED" | "CANCELLED")
+            ) {
                 return s;
             }
-            assert!(t0.elapsed() < Duration::from_secs(120), "job {id} did not finish: {s}");
+            assert!(
+                t0.elapsed() < Duration::from_secs(120),
+                "job {id} did not finish: {s}"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -119,14 +146,22 @@ fn serve_runs_jobs_over_http_with_runpod_status_shapes() {
     assert_eq!(info["serve"]["mode"], "pod");
 
     // A job through the queue: RunPod's envelope or the bare input.
-    let (code, sub) = pod.call("POST", "/jobs", Some(json!({"input": {"op": "info"}})), true);
+    let (code, sub) = pod.call(
+        "POST",
+        "/jobs",
+        Some(json!({"input": {"op": "info"}})),
+        true,
+    );
     assert_eq!(code, 202, "{sub}");
     assert_eq!(sub["status"], "IN_QUEUE");
     let id = sub["id"].as_str().unwrap().to_string();
     let done = pod.wait(&id);
     assert_eq!(done["status"], "COMPLETED", "{done}");
     assert_eq!(done["output"]["op"], "info");
-    assert!(done["delayTime"].is_i64() && done["executionTime"].is_i64(), "{done}");
+    assert!(
+        done["delayTime"].is_i64() && done["executionTime"].is_i64(),
+        "{done}"
+    );
 
     let (code, sub) = pod.call("POST", "/jobs", Some(json!({"op": "r2"})), true);
     assert_eq!(code, 202);
@@ -135,7 +170,12 @@ fn serve_runs_jobs_over_http_with_runpod_status_shapes() {
     assert_eq!(done["output"]["op"], "r2");
 
     // A refused job is COMPLETED with an error output on RunPod; here it is FAILED with the error.
-    let (code, sub) = pod.call("POST", "/jobs", Some(json!({"input": {"op": "nope"}})), true);
+    let (code, sub) = pod.call(
+        "POST",
+        "/jobs",
+        Some(json!({"input": {"op": "nope"}})),
+        true,
+    );
     assert_eq!(code, 202);
     let done = pod.wait(sub["id"].as_str().unwrap());
     assert_eq!(done["status"], "FAILED", "{done}");
@@ -144,7 +184,11 @@ fn serve_runs_jobs_over_http_with_runpod_status_shapes() {
 
     // Bad bodies, unknown jobs, the serve / worker ops.
     assert_eq!(pod.call("POST", "/jobs", Some(json!([1, 2])), true).0, 400);
-    assert_eq!(pod.call("POST", "/jobs", Some(json!({"op": "serve"})), true).0, 400);
+    assert_eq!(
+        pod.call("POST", "/jobs", Some(json!({"op": "serve"})), true)
+            .0,
+        400
+    );
     assert_eq!(pod.call("GET", "/jobs/nope", None, true).0, 404);
     assert_eq!(pod.call("POST", "/jobs/nope/cancel", None, true).0, 404);
     assert_eq!(pod.call("GET", "/nothing", None, true).0, 404);
@@ -172,7 +216,10 @@ fn serve_runs_jobs_over_http_with_runpod_status_shapes() {
     let (code, c) = pod.call("POST", &format!("/jobs/{last}/cancel"), None, true);
     assert_eq!(code, 200);
     let final_ = pod.wait(&last);
-    assert!(matches!(final_["status"].as_str(), Some("CANCELLED" | "COMPLETED")), "{final_} after {c}");
+    assert!(
+        matches!(final_["status"].as_str(), Some("CANCELLED" | "COMPLETED")),
+        "{final_} after {c}"
+    );
     for q in &queued[..queued.len() - 1] {
         assert_eq!(pod.wait(q)["status"], "COMPLETED");
     }
@@ -181,12 +228,76 @@ fn serve_runs_jobs_over_http_with_runpod_status_shapes() {
 #[test]
 fn serve_config_needs_a_token_unless_told_not_to() {
     let mut e = HashMap::new();
-    assert!(ServeConfig::from_env(&e).unwrap_err().contains("STUDIO_SERVE_TOKEN"));
+    assert!(ServeConfig::from_env(&e)
+        .unwrap_err()
+        .contains("STUDIO_SERVE_TOKEN"));
     e.insert("STUDIO_SERVE_NO_AUTH".into(), "1".into());
     let c = ServeConfig::from_env(&e).unwrap();
     assert!(c.token.is_none());
     assert_eq!(c.bind, fvstudio::serve::DEFAULT_BIND);
     assert_eq!(c.pod_hours, 4.0);
     e.insert("STUDIO_POD_HOURS".into(), "x".into());
-    assert!(ServeConfig::from_env(&e).unwrap_err().contains("STUDIO_POD_HOURS"));
+    assert!(ServeConfig::from_env(&e)
+        .unwrap_err()
+        .contains("STUDIO_POD_HOURS"));
+}
+
+#[test]
+fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
+    let dir = fvstudio::tempdir("serve-streams");
+    let fake = FakeFvServe::start(dir.join("fvfiles"), 2, 0.1, None);
+    let mut env = env_map(&dir);
+    env.insert("STUDIO_FV_FAKE".into(), "1".into());
+    env.insert("STUDIO_FV_PORT".into(), fake.fake.port.to_string());
+    let pod = Pod::start(env);
+
+    // Validation before fv-serve is asked.
+    assert_eq!(pod.call("POST", "/streams", Some(json!({"model": "nope", "prompt": "a fox"})), true).0, 400);
+    assert_eq!(pod.call("POST", "/streams", Some(json!({"model": "fasth3-4step-vsa-480p-taeh3"})), true).0, 400);
+    assert_eq!(pod.call("GET", "/streams/none", None, true).0, 404);
+
+    // Open: the catalog model's variant, Cloudflare by default, the WHEP URL back.
+    let (code, s) = pod.call("POST", "/streams", Some(json!({"model": "fasth3-4step-vsa-480p-taeh3", "prompt": "a fox in the snow", "max_seconds": 60})), true);
+    assert_eq!(code, 201, "{s}");
+    let id = s["id"].as_str().unwrap().to_string();
+    assert_eq!(s["mode"], "clip");
+    assert_eq!(s["studio_model"], "fasth3-4step-vsa-480p-taeh3");
+    assert!(s["playback"]["whep_url"].as_str().unwrap().contains("/webRTC/play"), "{s}");
+    let sent = fake.state.lock().unwrap().requests.last().cloned().unwrap();
+    assert_eq!(sent["model"], "fasth3-4step-vsa-480p-taeh3");
+    assert_eq!(sent["output"], json!({"kind": "cloudflare"}));
+    assert_eq!(sent["max_seconds"], 60);
+    assert!(sent.get("studio_model").is_none());
+
+    // Health and the list show it; a second stream is fv-serve's 429.
+    let (_, h) = pod.call("GET", "/health", None, true);
+    assert_eq!(h["streams"], json!([id]));
+    let (code, l) = pod.call("GET", "/streams", None, true);
+    assert_eq!(code, 200);
+    assert_eq!(l["data"].as_array().unwrap().len(), 1);
+    assert_eq!(pod.call("POST", "/streams", Some(json!({"model": "sol-h3", "prompt": "x"})), true).0, 429);
+
+    // A job submitted now waits for the stream.
+    let (_, sub) = pod.call("POST", "/jobs", Some(json!({"op": "info"})), true);
+    let jid = sub["id"].as_str().unwrap().to_string();
+    std::thread::sleep(Duration::from_millis(900));
+    let (_, js) = pod.call("GET", &format!("/jobs/{jid}"), None, true);
+    assert_eq!(js["status"], "IN_QUEUE", "{js}");
+    assert_eq!(js["output"]["detail"], "waiting for the live stream", "{js}");
+
+    // Steer, read, stop.
+    let (code, c) = pod.call("POST", &format!("/streams/{id}/commands"), Some(json!({"type": "set_prompt", "data": {"prompt": "the fox at dusk"}})), true);
+    assert_eq!(code, 200, "{c}");
+    assert_eq!(c["reply"]["ok"], true);
+    let (code, g) = pod.call("GET", &format!("/streams/{id}"), None, true);
+    assert_eq!(code, 200);
+    assert_eq!(g["session"]["prompt"], "the fox at dusk");
+    let (code, _) = pod.call("DELETE", &format!("/streams/{id}"), None, true);
+    assert_eq!(code, 204);
+    let (_, h) = pod.call("GET", "/health", None, true);
+    assert_eq!(h["streams"], json!([]));
+    assert_eq!(pod.call("GET", &format!("/streams/{id}"), None, true).0, 404);
+    // The waiting job runs once the stream is gone.
+    let done = pod.wait(&jid);
+    assert_eq!(done["status"], "COMPLETED", "{done}");
 }

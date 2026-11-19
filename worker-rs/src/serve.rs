@@ -10,6 +10,11 @@
 //! | `GET /jobs/{id}` | RunPod's status shape: `output` is the last progress record while `IN_PROGRESS`, the result once `COMPLETED` |
 //! | `POST /jobs/{id}/cancel` | queued → `CANCELLED`; running → the sidecars are stopped and the job ends `CANCELLED` |
 //! | `GET /jobs` | the recent jobs |
+//! | `POST /streams` | `{model, prompt, max_seconds?, seed?, resolution?, aspect_ratio?, output?}`: fv-serve's `POST /fv/v1/streams` on the model's process group (started when it is not up), `output` defaulting to Cloudflare Stream → the stream object (`playback.whep_url`) |
+//! | `GET /streams`, `GET /streams/{id}`, `POST /streams/{id}/commands`, `DELETE /streams/{id}` | forwarded to that fv-serve |
+//!
+//! A live stream holds the GPU: jobs wait in the queue ("waiting for the
+//! live stream") until every stream of the pod has ended.
 //!
 //! Bearer `STUDIO_SERVE_TOKEN` on every route (`STUDIO_SERVE_NO_AUTH=1` for
 //! tests). `STUDIO_POD_HOURS` (default 4) is the wall-clock cap: at it the
@@ -21,7 +26,7 @@ use crate::py::py_str;
 use crate::worker::Worker;
 use crate::{EnvMap, Log};
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -44,14 +49,25 @@ pub struct ServeConfig {
 
 impl ServeConfig {
     pub fn from_env(e: &EnvMap) -> Result<ServeConfig, String> {
-        let get = |k: &str| e.get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-        let no_auth = get("STUDIO_SERVE_NO_AUTH").map(|v| v == "1").unwrap_or(false);
+        let get = |k: &str| {
+            e.get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let no_auth = get("STUDIO_SERVE_NO_AUTH")
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let token = get("STUDIO_SERVE_TOKEN");
         if token.is_none() && !no_auth {
-            return Err("serve: STUDIO_SERVE_TOKEN is not set (STUDIO_SERVE_NO_AUTH=1 only for tests)".into());
+            return Err(
+                "serve: STUDIO_SERVE_TOKEN is not set (STUDIO_SERVE_NO_AUTH=1 only for tests)"
+                    .into(),
+            );
         }
         let pod_hours = match get("STUDIO_POD_HOURS") {
-            Some(v) => v.parse::<f64>().map_err(|_| format!("serve: STUDIO_POD_HOURS={v:?} is not a number"))?,
+            Some(v) => v
+                .parse::<f64>()
+                .map_err(|_| format!("serve: STUDIO_POD_HOURS={v:?} is not a number"))?,
             None => 4.0,
         };
         Ok(ServeConfig {
@@ -100,9 +116,15 @@ impl JobRec {
             o.insert("error".into(), e.clone());
         }
         if let Some(s) = self.started {
-            o.insert("delayTime".into(), json!(((s - self.submitted) * 1000.0).round() as i64));
+            o.insert(
+                "delayTime".into(),
+                json!(((s - self.submitted) * 1000.0).round() as i64),
+            );
             if let Some(f) = self.finished {
-                o.insert("executionTime".into(), json!(((f - s) * 1000.0).round() as i64));
+                o.insert(
+                    "executionTime".into(),
+                    json!(((f - s) * 1000.0).round() as i64),
+                );
             }
         }
         Value::Object(o)
@@ -116,6 +138,8 @@ struct State {
     queue: Mutex<VecDeque<String>>,
     wake: Condvar,
     running: Mutex<Option<String>>,
+    /// Live streams: id → the fv-serve base they run on.
+    live: Mutex<HashMap<String, String>>,
     stop: AtomicBool,
     jobs_done: AtomicU64,
     started: f64,
@@ -182,12 +206,39 @@ impl State {
                     if let Some(id) = q.pop_front() {
                         break id;
                     }
-                    q = self.wake.wait_timeout(q, Duration::from_millis(250)).unwrap().0;
+                    q = self
+                        .wake
+                        .wait_timeout(q, Duration::from_millis(250))
+                        .unwrap()
+                        .0;
                 }
             };
             let Some(rec) = self.job(&next) else { continue };
             if rec.status != "IN_QUEUE" {
                 continue; // cancelled while queued
+            }
+            // A live stream holds the GPU: wait for it to end (or the job to be cancelled).
+            let mut waited = false;
+            while !self.live.lock().unwrap().is_empty() && !self.stop.load(Ordering::SeqCst) {
+                if self
+                    .job(&next)
+                    .map(|j| j.status != "IN_QUEUE")
+                    .unwrap_or(true)
+                {
+                    break;
+                }
+                if !waited {
+                    self.patch(&next, |j| j.progress = Some(json!({"stage": "queued", "detail": "waiting for the live stream", "elapsed_s": 0})));
+                    waited = true;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            if self
+                .job(&next)
+                .map(|j| j.status != "IN_QUEUE")
+                .unwrap_or(true)
+            {
+                continue;
             }
             let t0 = now_s();
             self.patch(&next, |j| {
@@ -201,7 +252,9 @@ impl State {
             let progress = move |p: &Value| {
                 me.patch(&id, |j| j.progress = Some(p.clone()));
             };
-            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.worker.handle(&job, Some(&progress))));
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.worker.handle(&job, Some(&progress))
+            }));
             let now = now_s();
             self.jobs_done.fetch_add(1, Ordering::SeqCst);
             *self.running.lock().unwrap() = None;
@@ -224,17 +277,29 @@ impl State {
                         j.output = Some(Value::Object(o));
                     }
                     Ok(v) => {
-                        j.status = if j.cancel { "CANCELLED".into() } else { "COMPLETED".into() };
+                        j.status = if j.cancel {
+                            "CANCELLED".into()
+                        } else {
+                            "COMPLETED".into()
+                        };
                         j.output = Some(v);
                     }
                     Err(_) => {
-                        j.status = if j.cancel { "CANCELLED".into() } else { "FAILED".into() };
+                        j.status = if j.cancel {
+                            "CANCELLED".into()
+                        } else {
+                            "FAILED".into()
+                        };
                         j.error = Some(json!("the worker panicked on this job"));
                     }
                 }
             });
             if let Some(r) = self.job(&next) {
-                (self.log)(&format!("serve: job {next} {} in {:.1} s", r.status, now - t0));
+                (self.log)(&format!(
+                    "serve: job {next} {} in {:.1} s",
+                    r.status,
+                    now - t0
+                ));
             }
         }
     }
@@ -257,7 +322,9 @@ impl State {
             }
             _ => {}
         }
-        Some(json!({"id": id, "status": self.job(id).map(|j| j.status).unwrap_or_else(|| "CANCELLED".into())}))
+        Some(
+            json!({"id": id, "status": self.job(id).map(|j| j.status).unwrap_or_else(|| "CANCELLED".into())}),
+        )
     }
 
     fn health(&self) -> Value {
@@ -271,6 +338,7 @@ impl State {
             "jobs_done": self.jobs_done.load(Ordering::SeqCst),
             "pod": self.cfg.runpod_pod_id,
             "pod_hours": self.cfg.pod_hours,
+            "streams": self.live.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
             "image": self.worker.cfg.image,
             "sidecars": self.worker.sidecars.resident(),
         })
@@ -304,7 +372,8 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     let mut diff = a.len() ^ b.len();
     let n = a.len().max(b.len()).max(1);
     for i in 0..n {
-        diff |= (*a.get(i % a.len().max(1)).unwrap_or(&0) ^ *b.get(i % b.len().max(1)).unwrap_or(&0)) as usize;
+        diff |= (*a.get(i % a.len().max(1)).unwrap_or(&0)
+            ^ *b.get(i % b.len().max(1)).unwrap_or(&0)) as usize;
     }
     diff == 0
 }
@@ -330,7 +399,11 @@ fn authorized(cfg: &ServeConfig, req: &Request) -> bool {
         .find(|h| h.field.equiv("Authorization"))
         .map(|h| h.value.as_str().to_string())
         .unwrap_or_default();
-    let given = given.strip_prefix("Bearer ").or_else(|| given.strip_prefix("bearer ")).unwrap_or("").trim();
+    let given = given
+        .strip_prefix("Bearer ")
+        .or_else(|| given.strip_prefix("bearer "))
+        .unwrap_or("")
+        .trim();
     !given.is_empty() && constant_time_eq(given, want)
 }
 
@@ -340,7 +413,10 @@ fn read_body(req: &mut Request) -> Result<Value, String> {
         return Err(format!("the body is over {BODY_LIMIT} bytes"));
     }
     let mut buf = Vec::with_capacity(len.min(BODY_LIMIT));
-    req.as_reader().take(BODY_LIMIT as u64 + 1).read_to_end(&mut buf).map_err(|e| format!("read: {e}"))?;
+    req.as_reader()
+        .take(BODY_LIMIT as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("read: {e}"))?;
     if buf.len() > BODY_LIMIT {
         return Err(format!("the body is over {BODY_LIMIT} bytes"));
     }
@@ -350,14 +426,199 @@ fn read_body(req: &mut Request) -> Result<Value, String> {
     serde_json::from_slice(&buf).map_err(|e| format!("the body is not valid JSON: {e}"))
 }
 
+/// A forwarded fv-serve call: its status and JSON (an unreachable fv-serve
+/// is a 502 with the reason).
+fn forward(method: &str, url: &str, body: Option<&Value>) -> (u16, Value) {
+    let mut r = ureq::request(method, url).timeout(Duration::from_secs(120));
+    if body.is_some() {
+        r = r.set("Content-Type", "application/json");
+    }
+    let resp = match body {
+        Some(b) => r.send_string(&b.to_string()),
+        None => r.call(),
+    };
+    let parse = |resp: ureq::Response| -> (u16, Value) {
+        let code = resp.status();
+        let text = resp.into_string().unwrap_or_default();
+        let v = serde_json::from_str(&text).unwrap_or_else(|_| {
+            if text.is_empty() {
+                json!({})
+            } else {
+                json!({"raw": text})
+            }
+        });
+        (code, v)
+    };
+    match resp {
+        Ok(ok) => parse(ok),
+        Err(ureq::Error::Status(_, resp)) => parse(resp),
+        Err(e) => (502, json!({"error": format!("fv-serve: {e}")})),
+    }
+}
+
+const TERMINAL_STREAM: [&str; 4] = ["closed", "ended", "failed", "stopped"];
+
+/// The live streams (docs/pod-mode.md §2, phase 2): `POST /streams` opens
+/// one on the model's fv-serve; the rest is forwarded by id.
+fn handle_streams(state: &Arc<State>, mut req: Request, method: Method, path: &str) {
+    if method == Method::Post && path == "/streams" {
+        let body = match read_body(&mut req) {
+            Ok(b) if b.is_object() => b,
+            Ok(_) => {
+                return reply(
+                    req,
+                    400,
+                    &json!({"error": "the body must be a JSON object"}),
+                )
+            }
+            Err(e) => return reply(req, 400, &json!({"error": e})),
+        };
+        let model_id = body.get("model").map(py_str).unwrap_or_default();
+        let prompt = body.get("prompt").map(py_str).unwrap_or_default();
+        if model_id.is_empty() || prompt.trim().is_empty() {
+            return reply(req, 400, &json!({"error": "model and prompt are required"}));
+        }
+        let Some(model) = state.worker.catalog.model("fastvideo", &model_id).cloned() else {
+            return reply(
+                req,
+                400,
+                &json!({"error": format!("unknown fastvideo model {}", crate::py::py_str_repr(&model_id))}),
+            );
+        };
+        let variant = model.recipe.get("variant").map(py_str).unwrap_or_default();
+        let (base, load_s) = match state.worker.fastvideo_serve(&model.id, None) {
+            Ok(v) => v,
+            Err(e) => return reply(req, 503, &e.to_output()),
+        };
+        let mut out = Map::new();
+        out.insert("model".into(), json!(variant));
+        out.insert("prompt".into(), json!(prompt));
+        out.insert(
+            "output".into(),
+            body.get("output")
+                .cloned()
+                .unwrap_or_else(|| json!({"kind": "cloudflare"})),
+        );
+        for k in [
+            "max_seconds",
+            "seed",
+            "resolution",
+            "aspect_ratio",
+            "negative_prompt",
+            "options",
+        ] {
+            if let Some(v) = body.get(k) {
+                out.insert(k.into(), v.clone());
+            }
+        }
+        let (code, mut v) = forward(
+            "POST",
+            &format!("{base}/fv/v1/streams"),
+            Some(&Value::Object(out)),
+        );
+        if (200..300).contains(&code) {
+            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                state
+                    .live
+                    .lock()
+                    .unwrap()
+                    .insert(id.to_string(), base.clone());
+                (state.log)(&format!("serve: stream {id} on {} ({model_id})", model.id));
+            }
+            if let Value::Object(o) = &mut v {
+                o.insert("studio_model".into(), json!(model.id));
+                o.insert("load_s".into(), json!(crate::py::round_to(load_s, 1)));
+            }
+        }
+        return reply(req, code, &v);
+    }
+    if method == Method::Get && path == "/streams" {
+        let live = state.live.lock().unwrap().clone();
+        let bases: HashSet<String> = live.values().cloned().collect();
+        let mut all = Vec::new();
+        for b in bases {
+            let (code, v) = forward("GET", &format!("{b}/fv/v1/streams"), None);
+            if (200..300).contains(&code) {
+                if let Some(a) = v.get("data").and_then(|d| d.as_array()) {
+                    all.extend(a.iter().cloned());
+                } else if let Some(a) = v.as_array() {
+                    all.extend(a.iter().cloned());
+                }
+            }
+        }
+        return reply(
+            req,
+            200,
+            &json!({"data": all, "live": live.keys().cloned().collect::<Vec<_>>()}),
+        );
+    }
+    let rest = path.strip_prefix("/streams/").unwrap_or("");
+    let (id, action) = match rest.split_once('/') {
+        Some((id, a)) => (id, Some(a)),
+        None => (rest, None),
+    };
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return reply(req, 404, &json!({"error": "no such stream"}));
+    }
+    let Some(base) = state.live.lock().unwrap().get(id).cloned() else {
+        return reply(req, 404, &json!({"error": "no such stream on this pod"}));
+    };
+    match (method, action) {
+        (Method::Get, None) => {
+            let (code, v) = forward("GET", &format!("{base}/fv/v1/streams/{id}"), None);
+            let st = v
+                .get("status")
+                .and_then(|s| s.get("state"))
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+            if code == 404 || TERMINAL_STREAM.contains(&st) {
+                state.live.lock().unwrap().remove(id);
+            }
+            reply(req, code, &v)
+        }
+        (Method::Post, Some("commands")) => {
+            let body = match read_body(&mut req) {
+                Ok(b) => b,
+                Err(e) => return reply(req, 400, &json!({"error": e})),
+            };
+            let (code, v) = forward(
+                "POST",
+                &format!("{base}/fv/v1/streams/{id}/commands"),
+                Some(&body),
+            );
+            reply(req, code, &v)
+        }
+        (Method::Delete, None) => {
+            let (code, v) = forward("DELETE", &format!("{base}/fv/v1/streams/{id}"), None);
+            if (200..300).contains(&code) || code == 404 {
+                state.live.lock().unwrap().remove(id);
+            }
+            reply(req, code, &v)
+        }
+        _ => reply(req, 405, &json!({"error": "method not allowed"})),
+    }
+}
+
 /// One request. `POST /jobs` takes `{"input": …}` (RunPod's envelope) or
 /// the input itself.
 fn handle(state: &Arc<State>, mut req: Request) {
     let url = req.url().to_string();
-    let path = url.split('?').next().unwrap_or("").trim_end_matches('/').to_string();
+    let path = url
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/')
+        .to_string();
     let method = req.method().clone();
     if !authorized(&state.cfg, &req) {
         return reply(req, 401, &json!({"error": "unauthorized"}));
+    }
+    if path == "/streams" || path.starts_with("/streams/") {
+        return handle_streams(state, req, method, &path);
     }
     match (method, path.as_str()) {
         (Method::Get, "/health") => reply(req, 200, &state.health()),
@@ -375,7 +636,13 @@ fn handle(state: &Arc<State>, mut req: Request) {
             let input = match body.get("input") {
                 Some(i) if i.is_object() => i.clone(),
                 _ if body.is_object() => body,
-                _ => return reply(req, 400, &json!({"error": "the body must be a JSON object (the job input)"})),
+                _ => {
+                    return reply(
+                        req,
+                        400,
+                        &json!({"error": "the body must be a JSON object (the job input)"}),
+                    )
+                }
             };
             if let Some(op) = input.get("op").and_then(|o| o.as_str()) {
                 if matches!(op, "serve" | "worker") {
@@ -383,7 +650,10 @@ fn handle(state: &Arc<State>, mut req: Request) {
                 }
             }
             let id = state.submit(input);
-            let status = state.job(&id).map(|j| j.status).unwrap_or_else(|| "IN_QUEUE".into());
+            let status = state
+                .job(&id)
+                .map(|j| j.status)
+                .unwrap_or_else(|| "IN_QUEUE".into());
             reply(req, 202, &json!({"id": id, "status": status}))
         }
         (m, p) if p.starts_with("/jobs/") => {
@@ -392,7 +662,11 @@ fn handle(state: &Arc<State>, mut req: Request) {
                 Some((id, a)) => (id, Some(a)),
                 None => (rest, None),
             };
-            if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            if id.is_empty()
+                || !id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
                 return reply(req, 404, &json!({"error": "no such job"}));
             }
             match (m, action) {
@@ -420,12 +694,18 @@ pub fn terminate_pod(cfg: &ServeConfig, log: &Log) {
     };
     let url = format!("https://api.runpod.io/v2/pods/{pod}");
     for attempt in 1..=3 {
-        match ureq::delete(&url).set("Authorization", &format!("Bearer {key}")).timeout(Duration::from_secs(30)).call() {
+        match ureq::delete(&url)
+            .set("Authorization", &format!("Bearer {key}"))
+            .timeout(Duration::from_secs(30))
+            .call()
+        {
             Ok(r) => {
                 log(&format!("serve: pod {pod} terminated ({})", r.status()));
                 return;
             }
-            Err(ureq::Error::Status(code, _)) => log(&format!("serve: terminate {pod}: HTTP {code} (attempt {attempt})")),
+            Err(ureq::Error::Status(code, _)) => log(&format!(
+                "serve: terminate {pod}: HTTP {code} (attempt {attempt})"
+            )),
             Err(e) => log(&format!("serve: terminate {pod}: {e} (attempt {attempt})")),
         }
         std::thread::sleep(Duration::from_secs(5));
@@ -434,7 +714,13 @@ pub fn terminate_pod(cfg: &ServeConfig, log: &Log) {
 
 /// Serve until the pod-hours cap (then terminate the pod and return) or
 /// `stop` is set. `ready` receives the bound address once listening.
-pub fn serve(worker: Arc<Worker>, cfg: ServeConfig, log: Log, stop: Arc<AtomicBool>, ready: Option<&dyn Fn(String)>) -> Result<(), String> {
+pub fn serve(
+    worker: Arc<Worker>,
+    cfg: ServeConfig,
+    log: Log,
+    stop: Arc<AtomicBool>,
+    ready: Option<&dyn Fn(String)>,
+) -> Result<(), String> {
     let server = Server::http(&cfg.bind).map_err(|e| format!("serve: bind {}: {e}", cfg.bind))?;
     let addr = server.server_addr().to_string();
     let state = Arc::new(State {
@@ -444,25 +730,36 @@ pub fn serve(worker: Arc<Worker>, cfg: ServeConfig, log: Log, stop: Arc<AtomicBo
         queue: Mutex::new(VecDeque::new()),
         wake: Condvar::new(),
         running: Mutex::new(None),
+        live: Mutex::new(HashMap::new()),
         stop: AtomicBool::new(false),
         jobs_done: AtomicU64::new(0),
         started: now_s(),
         log: log.clone(),
         cfg: cfg.clone(),
     });
-    log(&format!("serve: listening on {addr} ({} auth), pod cap {:.2} h", if cfg.token.is_some() { "token" } else { "no" }, cfg.pod_hours));
+    log(&format!(
+        "serve: listening on {addr} ({} auth), pod cap {:.2} h",
+        if cfg.token.is_some() { "token" } else { "no" },
+        cfg.pod_hours
+    ));
     if let Some(r) = ready {
         r(addr.clone());
     }
     let jobs_thread = {
         let st = Arc::clone(&state);
-        std::thread::Builder::new().name("serve-jobs".into()).spawn(move || st.run_jobs()).map_err(|e| format!("serve: jobs thread: {e}"))?
+        std::thread::Builder::new()
+            .name("serve-jobs".into())
+            .spawn(move || st.run_jobs())
+            .map_err(|e| format!("serve: jobs thread: {e}"))?
     };
     let deadline = state.started + cfg.pod_hours * 3600.0;
     let mut capped = false;
     while !stop.load(Ordering::SeqCst) {
         if now_s() >= deadline {
-            log(&format!("serve: the {:.2} h pod cap is up: stopping", cfg.pod_hours));
+            log(&format!(
+                "serve: the {:.2} h pod cap is up: stopping",
+                cfg.pod_hours
+            ));
             capped = true;
             break;
         }

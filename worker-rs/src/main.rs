@@ -61,7 +61,11 @@ fn main() {
             "fastvideo-studio pod: catalog {} ({} models), image {}",
             worker.cfg.catalog_path.display(),
             worker.catalog.models.len(),
-            if worker.cfg.image.is_empty() { "?" } else { &worker.cfg.image }
+            if worker.cfg.image.is_empty() {
+                "?"
+            } else {
+                &worker.cfg.image
+            }
         ));
         let stop = Arc::new(AtomicBool::new(false));
         rp::install_signal_handlers(stop.clone(), log.clone());

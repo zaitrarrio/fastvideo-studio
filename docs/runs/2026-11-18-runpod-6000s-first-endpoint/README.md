@@ -111,3 +111,38 @@ encodes in 0.13 s; the earlier image's h3 streamed the encoder per prompt
 step is fastwan-rs's 0.54 s on this card class; the fastvideo-rs H3 draft
 ran 6.2 s on the Server Edition against 36.1 s on the Workstation Edition
 pod of 00:30 (fv-serve load 104 against 156 s).
+
+### Prompt expansion (`options.prompt: balanced`), `h3-plug4` T2V 832×480×124, seed 7
+
+Job `92938c5f…`, cold worker. COMPLETED in 301 s wall (execution 294.8 s),
+MP4 832×480 124 frames H.264 + AAC 32 kHz (2.09 MB, ffprobe).
+
+| phase | time |
+|---|---|
+| staging the h3 trees | 55 s |
+| staging the GGUF tree `qwen3-vl-4b-instruct-gguf` from R2 (5.1 GB, first use on this worker) | 82 s |
+| llama-server start + the rewrite + `h3 serve` load (resident encoder) | 139 s (`load_s` 137.1) |
+| h3 encode / denoise (4 steps) / decode / mux | 1.0 / 7.5 (2.05, 1.82, 1.82, 1.83) / 3.7 / 3.2 s |
+
+The job's `expanded_prompt` (Qwen3-VL-4B through the H3 "balanced" system
+prompt ported from fastvideo-rs), passed to `h3 generate` as its `--prompt`:
+
+> integrated_multimodal_description: A red fox with glossy russet fur and
+> white chest trots through untouched snow, paws crunching softly; dawn light
+> glows pale gold through pine branches. The fox glances left, ears twitching,
+> nose twitching. \<d\>The fox sniffs the air.\</d\> Close-up, low-angle
+> tracking shot, shallow depth of field, golden-hour backlighting, cinematic
+> realism.
+> overall_soundscape: Distant pine rustle, crunching snow, faint birdsong.
+> non_diegetic_music: None.
+
+That is the H3 multimodal format FastVideo's pipeline expects (description
+with a `<d>` dialogue tag, soundscape, music line). The GGUF staging and the
+sidecar start are paid once per worker; on a warm worker the rewrite is the
+only extra cost (not yet measured separately: the worker's `load_s` folds the
+sidecar start and the rewrite into the h3 load).
+
+### Next image
+
+`FASTWAN_REF` moves to fastwan-rs `b50c842` (the check-input fix for the
+three VSA cases) so `op: check` reads 66 / 66 there.

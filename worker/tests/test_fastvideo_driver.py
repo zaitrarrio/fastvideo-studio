@@ -75,3 +75,18 @@ def test_refused_body_reports_engine(tmp_path, catalog, fake, monkeypatch):
     with pytest.raises(JobError) as e:
         fastvideo.run(ctx, job)
     assert e.value.where == "engine" and "bogus" in str(e.value)
+
+
+def test_resident_config_marks_the_requested_model(catalog):
+    from pathlib import Path
+    base = Path(__file__).resolve().parents[1] / "configs" / "fastvideo.toml"
+    out = fastvideo.resident_config(base.read_text(), "fastwan22-ti2v-5b")
+    blocks = out.split("[[models]]")[1:]
+    on = [b for b in blocks if 'variant = "fastwan22-ti2v-5b"' in b]
+    assert len(on) == 1 and "resident = true" in on[0]
+    assert sum(b.count("resident = true") for b in blocks) == 1
+    assert "swap = true" in out
+    import pytest
+    from fvstudio.errors import JobError
+    with pytest.raises(JobError):
+        fastvideo.resident_config(base.read_text(), "no-such-model")

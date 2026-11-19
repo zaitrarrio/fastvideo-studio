@@ -160,3 +160,25 @@ def test_ensure_model_reports_stage_time(tmp_path):
     w = WeightsResolver(r, log=lambda s: None)
     out = w.ensure_model(("weights/fastwan",), (), None)
     assert out["fetched"] == [] and out["staged"] == [] and out["stage_s"] >= 0
+
+
+def test_object_store_failure_is_a_stage_error(tmp_path):
+    from fvstudio import weights as w
+    from fvstudio.errors import JobError
+
+    class Denied:
+        def list_keys(self, bucket, prefix):
+            raise RuntimeError("AccessDenied: ListObjectsV2")
+
+        def get_file(self, *a):
+            raise RuntimeError("AccessDenied")
+
+        def get_bytes(self, *a):
+            raise RuntimeError("AccessDenied")
+
+    roots = w.Roots(volume=tmp_path / "vol", volume_weights=tmp_path / "vol" / "weights", volume_extras=tmp_path / "vol" / "h3-rs",
+                    stage_dir=tmp_path / "stage", link_root=tmp_path / "w")
+    r = w.WeightsResolver(roots, Denied(), log=lambda s: None)
+    with pytest.raises(JobError) as ei:
+        r.ensure_tree("r2:fv-weights/weights/fastwan21-1.3b=fastwan")
+    assert ei.value.where == "stage" and "AccessDenied" in ei.value.message

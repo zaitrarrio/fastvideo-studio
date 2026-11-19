@@ -413,6 +413,9 @@ def cmd_run(a: argparse.Namespace) -> None:
     t0 = time.time()
     r = poll(jid, quiet=True)
     print(f"{r.get('status')} in {time.time() - t0:.1f} s (delay {r.get('delayTime')} ms, execution {r.get('executionTime')} ms)", file=sys.stderr)
+    if r.get("error"):
+        # RunPod lifts a handler's `error` key out of the output into the status.
+        print(f"error: {r['error']}", file=sys.stderr)
     print(json.dumps(r.get("output"), indent=1))
 
 
@@ -436,13 +439,18 @@ def cmd_smoke(a: argparse.Namespace) -> None:
     results.append(("info", r.get("status"), time.time() - t0, r.get("executionTime")))
     for label, inp in SMOKE_JOBS:
         t1 = time.time()
-        r = poll(submit(inp), quiet=True)
+        jid = submit(inp)
+        print(f"{label}: job {jid}", file=sys.stderr)
+        r = poll(jid, quiet=True)
         out = r.get("output") or {}
-        ok = r.get("status") == "COMPLETED" and "error" not in out
+        err = r.get("error") or out.get("error") or ""
+        ok = r.get("status") == "COMPLETED" and not err
+        if err:
+            print(f"error: {err}", file=sys.stderr)
         print(json.dumps({k: v for k, v in out.items() if k not in ("command",)}, indent=1))
         if out.get("command"):
             print(f"command: {out['command']}", file=sys.stderr)
-        results.append((label, "ok" if ok else f"{r.get('status')}: {out.get('error', '')[:120]}", time.time() - t1, r.get("executionTime")))
+        results.append((label, "ok" if ok else f"{r.get('status')}: {str(err)[:120]}", time.time() - t1, r.get("executionTime")))
     print("\nsmoke summary")
     for label, st, wall, exe in results:
         print(f"  {label:28s} {st:40s} wall {wall:7.1f} s  execution {exe or '-'} ms")

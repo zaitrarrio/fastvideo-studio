@@ -19,7 +19,9 @@ from pathlib import Path
 def make_mp4(path: Path, width: int = 64, height: int = 48, frames: int = 9, fps: int = 24, audio: bool = True) -> bool:
     ff = shutil.which("ffmpeg")
     if not ff:
-        path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64)
+        # No ffmpeg (GitHub runners): a stub with the ftyp box and 1 KiB of padding, big
+        # enough for the drivers' "an MP4 came back" size checks.
+        path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 1024)
         return False
     cmd = [ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c=blue:s={width}x{height}:r={fps}:d={frames / fps:.3f}"]
     if audio:

@@ -143,6 +143,17 @@ class WeightsResolver:
         return {"stage_s": round(time.time() - t0, 3), "fetched": fetched, "staged": staged}
 
     def ensure_tree(self, entry: str) -> bool:
+        """One tree present under the link root; an object-store failure (a
+        token without read on the weights bucket, a network error) is a
+        staging failure, not an engine crash."""
+        try:
+            return self._ensure_tree(entry)
+        except JobError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise JobError("stage", f"{entry}: {type(e).__name__}: {e}") from None
+
+    def _ensure_tree(self, entry: str) -> bool:
         """Present under the link root. Returns True when it fetched something."""
         t = TreeEntry.parse(entry)
         link = self.roots.link_root / t.name

@@ -10,6 +10,8 @@ import { loadSession, saveSession, addHistory, updateHistory, findItem, isExpire
 const $ = (id) => document.getElementById(id);
 const FORM_KEY = "studio.form";
 const INFO_KEY = "studio.info";
+const BACKEND_KEY = "studio.backend";
+const POD_MS = 10000;
 const POLL_MS = 2000;
 const HEALTH_MS = 15000;
 const EXAMPLES = [
@@ -31,6 +33,9 @@ const S = {
   pollTimer: 0, healthTimer: 0,
   locked: !api.getToken(),
   busy: false,
+  backend: api.store(BACKEND_KEY) === "pod" ? "pod" : "serverless",
+  pod: null,             // the last /api/pod summary
+  podTimer: 0, podBusy: false,
   cardLimit: CARD_LIMIT, // 0 = every model of the family
 };
 
@@ -51,9 +56,67 @@ async function refreshHealth() {
   const up = ["idle", "ready", "running", "initializing"].reduce((a, k) => a + (w[k] || 0), 0);
   const queue = j.inQueue || 0;
   const label = h.label ? `${h.label} · ` : "";
-  setEngine("ok", `${label}ready: ${up} worker${up === 1 ? "" : "s"}${up ? "" : " (the first job starts one)"}, ${queue} in queue${w.throttled ? `, ${w.throttled} throttled` : ""}`);
+  if (h.pod) renderPod(h.pod);
+  if (S.backend === "pod") {
+    const p = S.pod || {};
+    if (p.state === "running" && p.ready) setEngine("ok", `${label}pod ${p.id} ready: ${p.health?.busy ? "busy" : "idle"}, ${p.health?.queued || 0} queued, ${p.health?.jobs_done || 0} done`);
+    else if (!p.state || ["none", "gone", "terminated"].includes(p.state)) setEngine("", `${label}no pod: start one below (the queue endpoint still answers)`);
+    else setEngine("wait", `${label}pod ${p.id || ""} ${p.state}${p.state === "running" ? ", serve not ready yet" : ""}`);
+  } else {
+    setEngine("ok", `${label}ready: ${up} worker${up === 1 ? "" : "s"}${up ? "" : " (the first job starts one)"}, ${queue} in queue${w.throttled ? `, ${w.throttled} throttled` : ""}`);
+  }
   updateGo();
   scheduleHealth(HEALTH_MS);
+}
+
+// ---- the pod backend (docs/pod-mode.md) --------------------------------------------
+function pickBackend(b) {
+  S.backend = b === "pod" ? "pod" : "serverless";
+  api.store(BACKEND_KEY, S.backend);
+  for (const el of $("backends").querySelectorAll("[data-backend]")) el.setAttribute("aria-pressed", String(el.dataset.backend === S.backend));
+  $("podbox").hidden = S.backend !== "pod";
+  if (S.backend === "pod") refreshPod(); else clearTimeout(S.podTimer);
+  updateGo(); if (!S.locked) refreshHealth();
+}
+function podReady() { return S.backend !== "pod" || (S.pod?.state === "running" && !!S.pod?.ready); }
+function podLive(p) { return !!p?.state && !["none", "gone", "terminated"].includes(p.state); }
+function renderPod(p) {
+  S.pod = p;
+  const live = podLive(p);
+  $("pod-start").hidden = live; $("pod-stop").hidden = !live;
+  const h = p.health || {};
+  let text;
+  if (!live && p.id) text = `Pod ${p.id} is ${p.state}.`;
+  else if (!live) text = "No pod. Start one to run every engine warm: about a minute to boot, then the first job of a model stages its weights once.";
+  else if (p.state === "running" && p.ready) text = `Pod ${p.id} (${p.gpu || "GPU"}${p.dc ? `, ${p.dc}` : ""}${p.cost ? `, $${p.cost}/h` : ""}) is ready: ${h.busy ? "running a job" : "idle"}, ${h.queued || 0} queued, ${h.jobs_done || 0} done, up ${fmt(h.uptime_s || 0)}; it stops itself after ${p.hours || h.pod_hours || "?"} h.`;
+  else if (p.state === "running") text = `Pod ${p.id} is running; its serve is not answering yet${p.health_error ? ` (${p.health_error})` : ""}.`;
+  else text = `Pod ${p.id} is ${p.state}${p.error ? ` (${p.error})` : ""}…`;
+  $("pod-text").textContent = text;
+  updateGo();
+}
+async function refreshPod() {
+  clearTimeout(S.podTimer);
+  if (S.locked || S.backend !== "pod") return;
+  try { renderPod(await api.getPod()); }
+  catch (e) { if (e instanceof api.AuthError) { lock("The studio token was refused."); return; } $("pod-text").textContent = `Pod status failed: ${e.message}`; }
+  const p = S.pod || {};
+  const settling = podLive(p) && !(p.state === "running" && p.ready);
+  S.podTimer = setTimeout(refreshPod, settling ? POD_MS : HEALTH_MS * 4);
+}
+async function startPod() {
+  if (S.podBusy) return;
+  S.podBusy = true; $("pod-start").disabled = true; $("pod-text").textContent = "Asking RunPod for a pod…";
+  try { renderPod(await api.startPod()); clearTimeout(S.podTimer); S.podTimer = setTimeout(refreshPod, POD_MS); }
+  catch (e) { if (e instanceof api.AuthError) lock("The studio token was refused."); else $("pod-text").textContent = `Start failed: ${e.message}`; }
+  S.podBusy = false; $("pod-start").disabled = false;
+}
+async function stopPod() {
+  if (S.podBusy || !confirm("Stop the pod? Its resident engines and any running job are lost.")) return;
+  S.podBusy = true; $("pod-stop").disabled = true; $("pod-text").textContent = "Terminating the pod…";
+  try { await api.stopPod(); renderPod({ state: "terminated", id: S.pod?.id }); }
+  catch (e) { if (e instanceof api.AuthError) lock("The studio token was refused."); else $("pod-text").textContent = `Stop failed: ${e.message}`; }
+  S.podBusy = false; $("pod-stop").disabled = false;
+  if (!S.locked) refreshHealth();
 }
 
 // ---- lock / unlock ------------------------------------------------------------------
@@ -78,6 +141,7 @@ async function unlock() {
   $("unlock").hidden = true; $("token").value = "";
   refreshHealth();
   resumePolling();
+  if (S.backend === "pod") refreshPod();
 }
 
 // ---- the form ------------------------------------------------------------------------
@@ -135,9 +199,9 @@ function refreshForm() {
 }
 
 function updateGo() {
-  const ok = !!S.model && !S.locked && !S.busy;
+  const ok = !!S.model && !S.locked && !S.busy && podReady();
   $("go").disabled = !ok;
-  $("go").textContent = S.busy ? "Submitting…" : "Generate clip";
+  $("go").textContent = S.busy ? "Submitting…" : S.backend === "pod" ? (podReady() ? "Generate clip on the pod" : "Start the pod first") : "Generate clip";
 }
 
 function currentState() {
@@ -266,9 +330,9 @@ async function generate(e) {
   try {
     st.inputs = bareMedia(await resolveInputs());
     const req = buildRequest(S.cat, S.model, st, { studio: "fastvideo-studio", job: localId });
-    const v = await api.submitJob(wireMedia(req));
+    const v = await api.submitJob({ ...wireMedia(req), backend: S.backend });
     const item = {
-      id: v.id, at: new Date().toISOString(), status: v.status || "IN_QUEUE",
+      id: v.id, at: new Date().toISOString(), status: v.status || "IN_QUEUE", backend: v.backend || S.backend,
       request: cleanRequest(req), prompt: req.prompt, model: S.model.id, modelLabel: S.model.label, engine: S.model.engine,
       task: S.task, taskLabel: taskLabel(S.cat, S.task), upscale: req.upscale, progress: null, output: null, error: null, track: { seen: {} },
     };
@@ -443,9 +507,16 @@ async function boot() {
   renderHistory($("history"), S.items, S.current);
   renderInfo(savedInfo()?.info, savedInfo() ? `· ${new Date(savedInfo().at).toLocaleString()}` : "· not asked yet");
   renderStages($("stages"), null);
-  if (S.locked) lock(); else { setEngine("wait", "Checking the endpoint…"); refreshHealth(); resumePolling(); }
+  for (const el of $("backends").querySelectorAll("[data-backend]")) el.setAttribute("aria-pressed", String(el.dataset.backend === S.backend));
+  $("podbox").hidden = S.backend !== "pod";
+  if (S.locked) lock(); else { setEngine("wait", "Checking the endpoint…"); refreshHealth(); resumePolling(); if (S.backend === "pod") refreshPod(); }
   if (S.items[0]) openItem(S.items[0].id);
 }
+
+$("backends").onclick = (e) => { const b = e.target.closest("[data-backend]")?.dataset.backend; if (b && b !== S.backend) pickBackend(b); };
+$("pod-start").onclick = startPod;
+$("pod-stop").onclick = stopPod;
+$("pod-refresh").onclick = refreshPod;
 
 $("families").onclick = (e) => { const f = e.target.closest("[data-family]")?.dataset.family; if (f) pickFamily(f); };
 $("models").onclick = (e) => {

@@ -26,9 +26,10 @@ indexmap = "2"
 sha2 = "0.10"
 thiserror = "2"
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# The pod mode's HTTP server (`studio-worker serve`, docs/pod-mode.md), blocking like the rest.
+tiny_http = "0.12"
 
 [dev-dependencies]
-tiny_http = "0.12"
 toml = "0.8"
 
 [profile.release]

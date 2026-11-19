@@ -158,3 +158,5 @@ details.info .body { padding: 0 12px 12px; display: grid; gap: 10px; }
 dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: 0.85rem; }
 dl.kv dt { font: 500 0.7rem/1.6 var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 dl.kv dd { margin: 0; font: 0.85rem/1.45 var(--f-mono); overflow-wrap: anywhere; }
+.podbox { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 6px; }
+.podbox .controls { flex-wrap: wrap; }

@@ -18,6 +18,7 @@ pub mod progress;
 pub mod py;
 pub mod r2;
 pub mod rp;
+pub mod serve;
 pub mod sidecar;
 pub mod upsampler;
 pub mod weights;

@@ -20,11 +20,26 @@ bucket_name = "fastvideo-studio"
 [vars]
 # Shown in the header next to the endpoint status.
 ENDPOINT_LABEL = "RunPod EU · PRO 6000"
+# The pod backend (docs/pod-mode.md): the worker image the pod runs in `serve`
+# mode (the same image as the endpoint's), its GPU type, data centre and the
+# weights volume, the container disk, the wall-clock cap in hours.
+POD_IMAGE = "ghcr.io/zaitrarrio/fastvideo-studio-worker:sha-f52591f"
+POD_GPU = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+POD_DC = "EU-RO-1"
+POD_VOLUME = "bz0ofkfx45"
+POD_DISK_GB = "300"
+POD_HOURS = "4"
+POD_MIN_CUDA = "13.0"
+# The Studio bucket's S3 endpoint for the pod (the endpoint's STUDIO_R2_ENDPOINT).
+STUDIO_R2_ENDPOINT = "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com"
+STUDIO_R2_BUCKET = "fastvideo-studio"
 
 # Secrets (never in this file): `npx wrangler@4 secret put <NAME>`
-#   RUNPOD_API_KEY      the RunPod API key
-#   RUNPOD_ENDPOINT_ID  the serverless endpoint id (api.runpod.ai/v2/<id>)
-#   STUDIO_TOKEN        the shared secret the page sends as a bearer token
+#   RUNPOD_API_KEY       the RunPod API key (the queue endpoint and, for the pod, REST v2)
+#   RUNPOD_ENDPOINT_ID   the serverless endpoint id (api.runpod.ai/v2/<id>)
+#   STUDIO_TOKEN         the shared secret the page sends as a bearer token
+#   CF_ACCOUNT_ID        Cloudflare account id and a Stream token (Account > Stream > Edit):
+#   CF_STREAM_API_TOKEN  the pod's live streams publish to Cloudflare Stream with them
 
 [observability]
 enabled = true

@@ -9,20 +9,22 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 fn usage() -> ! {
-    eprintln!("usage: studio-worker [--test-input FILE]\n\n  --test-input FILE  run this one job ({{\"input\": …}}) locally and exit, as the SDK's --test_input did");
+    eprintln!("usage: studio-worker [serve | --test-input FILE]\n\n  serve              the pod mode: the job pipeline over HTTP (docs/pod-mode.md)\n  --test-input FILE  run this one job ({{\"input\": …}}) locally and exit, as the SDK's --test_input did");
     std::process::exit(2)
 }
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let mut test_input: Option<String> = None;
+    let mut serve_mode = false;
     while let Some(a) = args.next() {
         match a.as_str() {
+            "serve" => serve_mode = true,
             "--test-input" | "--test_input" => {
                 test_input = Some(args.next().unwrap_or_else(|| usage()))
             }
             "-h" | "--help" => {
-                println!("fastvideo-studio RunPod worker\n\nusage: studio-worker [--test-input FILE]\n\n  --test-input FILE  run this one job ({{\"input\": …}}) locally and exit, as the SDK's --test_input did");
+                println!("fastvideo-studio RunPod worker\n\nusage: studio-worker [serve | --test-input FILE]\n\n  serve              the pod mode: the job pipeline over HTTP (docs/pod-mode.md)\n  --test-input FILE  run this one job ({{\"input\": …}}) locally and exit, as the SDK's --test_input did");
                 return;
             }
             s if s.starts_with("--test-input=") || s.starts_with("--test_input=") => {
@@ -47,6 +49,28 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if serve_mode {
+        let cfg = match fvstudio::serve::ServeConfig::from_env(&env_map) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
+        log(&format!(
+            "fastvideo-studio pod: catalog {} ({} models), image {}",
+            worker.cfg.catalog_path.display(),
+            worker.catalog.models.len(),
+            if worker.cfg.image.is_empty() { "?" } else { &worker.cfg.image }
+        ));
+        let stop = Arc::new(AtomicBool::new(false));
+        rp::install_signal_handlers(stop.clone(), log.clone());
+        if let Err(e) = fvstudio::serve::serve(worker.clone(), cfg, log.clone(), stop, None) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if test_input.is_some() || runpod.is_none() {
         let w = worker.clone();
         let handler = move |job: &serde_json::Value| {

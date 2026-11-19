@@ -40,6 +40,9 @@ export const submitJob = (input) => call("/api/jobs", { method: "POST", body: in
 export const getJob = (id) => call(`/api/jobs/${encodeURIComponent(id)}`);
 export const cancelJob = (id) => call(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 export const getInfo = () => call("/api/info", { method: "POST", signal: AbortSignal.timeout(70_000) });
+export const getPod = () => call("/api/pod", { signal: AbortSignal.timeout(30_000) });
+export const startPod = (hours) => call("/api/pod", { method: "POST", body: hours ? { hours } : {}, signal: AbortSignal.timeout(100_000) });
+export const stopPod = () => call("/api/pod", { method: "DELETE", signal: AbortSignal.timeout(70_000) });
 
 // A file into the R2 bucket: raw body with its name and type.
 export function uploadFile(file) {

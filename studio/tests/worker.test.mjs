@@ -2,7 +2,7 @@
 // RunPod is a fake fetch; R2 is an in-memory stub.
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import worker, { normaliseStatus, uploadKey } from "../worker.js";
+import worker, { normaliseStatus, uploadKey, podCreateBody, podEnv, podUrl } from "../worker.js";
 import catalog from "../../catalog/catalog.json" with { type: "json" };
 
 const ORIGIN = "https://studio.example.test";
@@ -15,6 +15,11 @@ class FakeR2 {
     this.objects.set(key, { body: buf, opts });
     return { key };
   }
+  async get(key) {
+    const o = this.objects.get(key);
+    return o ? { text: async () => new TextDecoder().decode(o.body) } : null;
+  }
+  async delete(key) { this.objects.delete(key); }
 }
 
 function env(extra = {}) {
@@ -115,7 +120,7 @@ describe("health", () => {
     rp = fakeRunpod({ "/health": { jobs: { inQueue: 2, inProgress: 1 }, workers: { idle: 1, running: 1 } } }); globalThis.fetch = rp;
     const r = await worker.fetch(req("/api/health"), env());
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { label: "test endpoint", workers: { idle: 1, running: 1 }, jobs: { inQueue: 2, inProgress: 1 } });
+    assert.deepEqual(await r.json(), { label: "test endpoint", workers: { idle: 1, running: 1 }, jobs: { inQueue: 2, inProgress: 1 }, pod: { state: "none" } });
     assert.equal(rp.calls[0].path, "/health");
   });
 
@@ -133,7 +138,7 @@ describe("jobs", () => {
     const input = { op: "generate", engine: "h3", model: "fasth3-v2", task: "t2v", prompt: "a fox", width: 1344, height: 768, frames: 124, seed: 7, options: { weights: "mxfp8" } };
     const r = await worker.fetch(req("/api/jobs", { method: "POST", body: input }), env());
     assert.equal(r.status, 202);
-    assert.deepEqual(await r.json(), { id: "job-1", status: "IN_QUEUE" });
+    assert.deepEqual(await r.json(), { id: "job-1", status: "IN_QUEUE", backend: "serverless" });
     assert.equal(rp.calls[0].path, "/run");
     assert.equal(rp.calls[0].method, "POST");
     assert.deepEqual(rp.calls[0].body, { input, policy: { executionTimeout: 1800000 } });
@@ -261,5 +266,131 @@ describe("uploads", () => {
     const k = uploadKey("Ünïcode name!.PNG", new Date(Date.UTC(2026, 10, 18)), "abc123");
     assert.equal(k, "uploads/2026-11/abc123-Unicode-name-.PNG");
     assert.equal(uploadKey("../../etc/passwd", new Date(Date.UTC(2026, 0, 1)), "r"), "uploads/2026-01/r-etc-passwd");
+  });
+});
+
+// ---- the pod backend ---------------------------------------------------------------
+// A fetch that answers RunPod's queue API (api.runpod.ai), its REST v2
+// (api.runpod.io) and the pod itself (<id>-8000.proxy.runpod.net).
+function fakeWorld({ queue = {}, rest = {}, pod = {} } = {}) {
+  const calls = [];
+  const fn = async (url, init = {}) => {
+    const u = new URL(url);
+    const auth = init.headers?.Authorization;
+    let table, path;
+    if (u.origin === "https://api.runpod.ai") { assert.equal(auth, "Bearer rp_key"); table = queue; path = u.pathname.replace("/v2/ep123", ""); }
+    else if (u.origin === "https://api.runpod.io") { assert.equal(auth, "Bearer rp_key"); table = rest; path = u.pathname.replace("/v2", ""); }
+    else if (/-8000\.proxy\.runpod\.net$/.test(u.host)) { table = pod; path = u.pathname; }
+    else throw new Error("unexpected host " + u.host);
+    const call = { host: u.host, path, method: init.method || "GET", body: init.body ? JSON.parse(init.body) : undefined, auth };
+    calls.push(call);
+    const hit = Object.entries(table).find(([p]) => path === p || path.startsWith(p));
+    if (!hit) return new Response(JSON.stringify({ error: "no route " + path }), { status: 404 });
+    const v = typeof hit[1] === "function" ? hit[1](call) : hit[1];
+    if (v instanceof Response) return v;
+    return new Response(JSON.stringify(v), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+describe("pod backend", () => {
+  const podEnvVars = { POD_IMAGE: "ghcr.io/x/studio:sha-1", STUDIO_R2_ENDPOINT: "https://acct.r2.cloudflarestorage.com", CF_ACCOUNT_ID: "cf1", CF_STREAM_API_TOKEN: "cf-tok" };
+
+  test("the create body is RunPod REST v2's shape with the serve command and the endpoint's env", () => {
+    const e = env(podEnvVars);
+    const body = podCreateBody(e, { image: "img", gpu: "GPU X", dc: "EU-RO-1", volume: "vol1", disk: 300, hours: 4, minCuda: "13.0" }, "tok", "studio-pod-1");
+    assert.deepEqual(Object.keys(body).sort(), ["cloud", "cmd", "dataCenterIds", "disk", "env", "gpu", "image", "mounts", "name", "ports"]);
+    assert.deepEqual(body.gpu, { id: "GPU X", count: 1, minCudaVersion: "13.0" });
+    assert.deepEqual(body.cmd, ["serve"]);
+    assert.deepEqual(body.mounts, { network: [{ volumeId: "vol1", path: "/runpod-volume" }] });
+    assert.equal(body.env.STUDIO_SERVE_TOKEN, "tok");
+    assert.equal(body.env.STUDIO_POD_HOURS, "4");
+    assert.equal(body.env.RUNPOD_API_KEY, "rp_key");
+    assert.equal(body.env.FV_R2_ACCESS_KEY_ID, "{{ RUNPOD_SECRET_fv_r2_access_key_id }}");
+    assert.equal(body.env.STUDIO_R2_ENDPOINT, "https://acct.r2.cloudflarestorage.com");
+    assert.equal(body.env.FV_CF_STREAM_API_TOKEN, "cf-tok");
+    assert.equal(podEnv(env(), { image: "i", hours: 2 }, "t").FV_CF_ACCOUNT_ID, undefined);
+    assert.equal(podUrl("abc"), "https://abc-8000.proxy.runpod.net");
+  });
+
+  test("no pod: status says none, jobs for the pod are 409, delete is 404", async () => {
+    const e = env(podEnvVars);
+    globalThis.fetch = fakeWorld();
+    let r = await worker.fetch(req("/api/pod"), e);
+    assert.deepEqual(await r.json(), { state: "none" });
+    r = await worker.fetch(req("/api/jobs", { method: "POST", body: { backend: "pod", engine: "h3", model: catalog.models[0].id, prompt: "a fox" } }), e);
+    assert.equal(r.status, 409);
+    r = await worker.fetch(req("/api/pod", { method: "DELETE" }), e);
+    assert.equal(r.status, 404);
+    r = await worker.fetch(req("/api/jobs", { method: "POST", body: { backend: "nope", engine: "h3", model: catalog.models[0].id, prompt: "a fox" } }), e);
+    assert.equal(r.status, 400);
+  });
+
+  test("create records the pod, status joins RunPod's state with the pod's health, delete terminates", async () => {
+    const e = env(podEnvVars);
+    const world = fakeWorld({
+      rest: {
+        "/pods/p1": (c) => c.method === "DELETE" ? new Response(null, { status: 204 }) : { id: "p1", status: "RUNNING", cost: 3.69, dataCenterId: "EU-RO-1", gpu: { id: "NVIDIA RTX PRO 6000 Blackwell Server Edition", count: 1 } },
+        "/pods": (c) => { assert.equal(c.method, "POST"); return { id: "p1", status: "PROVISIONING", cost: 3.69 }; },
+      },
+      pod: { "/health": { ok: true, mode: "pod", busy: false, queued: 0, jobs_done: 2 } },
+    });
+    globalThis.fetch = world;
+    let r = await worker.fetch(req("/api/pod", { method: "POST", body: { hours: 2 } }), e);
+    const created = await r.json();
+    assert.equal(r.status, 201, JSON.stringify(created));
+    assert.equal(created.id, "p1"); assert.equal(created.state, "provisioning"); assert.equal(created.hours, 2);
+    const create = world.calls.find((c) => c.path === "/pods" && c.method === "POST");
+    assert.equal(create.body.image, "ghcr.io/x/studio:sha-1");
+    assert.equal(create.body.env.STUDIO_POD_HOURS, "2");
+    assert.match(create.body.name, /^studio-pod-\d{12}$/);
+    const rec = JSON.parse(new TextDecoder().decode(e.UPLOADS.objects.get("studio/pod.json").body));
+    assert.equal(rec.id, "p1"); assert.equal(rec.url, "https://p1-8000.proxy.runpod.net"); assert.equal(rec.token.length, 32);
+    // A second create while one exists is 409.
+    r = await worker.fetch(req("/api/pod", { method: "POST" }), e);
+    assert.equal(r.status, 409);
+    // Status.
+    r = await worker.fetch(req("/api/pod"), e);
+    const st = await r.json();
+    assert.equal(st.state, "running"); assert.equal(st.ready, true); assert.equal(st.health.jobs_done, 2); assert.equal(st.cost, 3.69);
+    assert.equal(world.calls.find((c) => c.path === "/health").auth, `Bearer ${rec.token}`);
+    assert.equal(st.token, undefined);
+    // Health carries the pod summary.
+    globalThis.fetch = fakeWorld({ queue: { "/health": { workers: { idle: 1 }, jobs: {} } }, rest: { "/pods/p1": { id: "p1", status: "EXITED" } } });
+    r = await worker.fetch(req("/api/health"), e);
+    assert.equal((await r.json()).pod.state, "exited");
+    // Delete.
+    globalThis.fetch = world;
+    r = await worker.fetch(req("/api/pod", { method: "DELETE" }), e);
+    assert.deepEqual(await r.json(), { state: "terminated", id: "p1" });
+    assert.equal(e.UPLOADS.objects.has("studio/pod.json"), false);
+  });
+
+  test("pod jobs go to the pod with its token; ids are pod_…; status and cancel follow", async () => {
+    const e = env(podEnvVars);
+    await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));
+    const world = fakeWorld({
+      pod: {
+        "/jobs/j1/cancel": { id: "j1", status: "CANCELLED" },
+        "/jobs/j1": { id: "j1", status: "IN_PROGRESS", output: { stage: "denoising", elapsed_s: 3 } },
+        "/jobs": (c) => { assert.equal(c.method, "POST"); assert.equal(c.body.input.backend, undefined); assert.equal(c.body.input.prompt, "a fox"); return { id: "j1", status: "IN_QUEUE" }; },
+      },
+    });
+    globalThis.fetch = world;
+    let r = await worker.fetch(req("/api/jobs", { method: "POST", body: { backend: "pod", engine: "h3", model: catalog.models[0].id, prompt: "a fox" } }), e);
+    const sub = await r.json();
+    assert.equal(r.status, 202, JSON.stringify(sub));
+    assert.deepEqual(sub, { id: "pod_j1", status: "IN_QUEUE", backend: "pod" });
+    assert.equal(world.calls.at(-1).auth, "Bearer podtok");
+    r = await worker.fetch(req("/api/jobs/pod_j1"), e);
+    const s = await r.json();
+    assert.equal(s.id, "pod_j1"); assert.equal(s.status, "IN_PROGRESS"); assert.equal(s.progress.stage, "denoising"); assert.equal(s.backend, "pod");
+    r = await worker.fetch(req("/api/jobs/pod_j1/cancel", { method: "POST" }), e);
+    assert.deepEqual(await r.json(), { id: "pod_j1", status: "CANCELLED", backend: "pod" });
+    // Serverless jobs still go to the queue endpoint.
+    globalThis.fetch = fakeWorld({ queue: { "/run": { id: "q1", status: "IN_QUEUE" } } });
+    r = await worker.fetch(req("/api/jobs", { method: "POST", body: { engine: "h3", model: catalog.models[0].id, prompt: "a fox" } }), e);
+    assert.deepEqual(await r.json(), { id: "q1", status: "IN_QUEUE", backend: "serverless" });
   });
 });

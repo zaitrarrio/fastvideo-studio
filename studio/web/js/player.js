@@ -85,6 +85,7 @@ export function summaryText(item) {
   if (o.upscale?.factor) parts.push(`×${o.upscale.factor} to ${o.upscale.width}×${o.upscale.height}`);
   if (o.timings?.total_s != null) parts.push(`${fmt(o.timings.total_s)} total`);
   if (o.worker?.gpu) parts.push(shortGpu(o.worker.gpu));
+  if (item.backend === "pod") parts.push("pod");
   return parts.join(" · ");
 }
 

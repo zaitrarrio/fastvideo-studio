@@ -27,6 +27,21 @@
         <p class="msg bad" id="unlock-err" hidden></p>
       </div>
 
+      <h2>Run on</h2>
+      <div class="modes" id="backends" role="group" aria-label="Backend">
+        <button type="button" data-backend="serverless" aria-pressed="true">Serverless queue</button>
+        <button type="button" data-backend="pod" aria-pressed="false">Pod</button>
+      </div>
+      <div class="podbox" id="podbox" hidden>
+        <p class="hint" id="pod-text">Checking the pod…</p>
+        <div class="controls">
+          <button type="button" class="ghost small" id="pod-start">Start a pod</button>
+          <button type="button" class="ghost small" id="pod-stop" hidden>Stop the pod</button>
+          <button type="button" class="ghost small" id="pod-refresh">Refresh</button>
+          <span class="hint" id="pod-hint">A pod keeps every engine resident: no queue, no cold start, and it bills by the hour until it is stopped or reaches its cap.</span>
+        </div>
+      </div>
+
       <h2>Model</h2>
       <div class="modes" id="families" role="group" aria-label="Model family"></div>
       <div class="cards" id="models" role="group" aria-label="Model"></div>

@@ -433,28 +433,6 @@
    "group": "output",
    "field": "fps"
   },
-  "fv.prompt_expansion": {
-   "label": "Prompt expansion",
-   "type": "select",
-   "options": [
-    [
-     "disabled",
-     "Off"
-    ],
-    [
-     "balanced",
-     "Balanced"
-    ],
-    [
-     "quality",
-     "Quality"
-    ]
-   ],
-   "default": "disabled",
-   "group": "quality",
-   "help": "The serve-side Qwen3-VL upsampler (needs the sidecar).",
-   "field": "prompt_expansion"
-  },
   "fv.reference_strength": {
    "label": "Reference strength",
    "type": "float",
@@ -1986,9 +1964,7 @@
      362
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "fasth3-4step-vsa"
    },
@@ -2064,9 +2040,7 @@
      362
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "sol-h3"
    },
@@ -2129,9 +2103,7 @@
      362
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "fasth3-4step-vsa-480p-taeh3"
    },
@@ -2206,7 +2178,6 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion",
     "fv.reference_strength"
    ],
    "recipe": {
@@ -2282,7 +2253,6 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion",
     "fv.reference_strength"
    ],
    "recipe": {
@@ -2357,9 +2327,7 @@
      362
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "fasth3-trim-nvfp4"
    },
@@ -2432,9 +2400,7 @@
      362
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "fasth3-v2-nvfp4"
    },
@@ -2508,9 +2474,7 @@
      362
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "h3-lightx2v-turbo"
    },
@@ -2592,8 +2556,7 @@
     ]
    },
    "knobs": [
-    "fv.fps",
-    "fv.prompt_expansion"
+    "fv.fps"
    ],
    "recipe": {
     "variant": "ltx25-distill-sol"
@@ -2676,8 +2639,7 @@
     ]
    },
    "knobs": [
-    "fv.fps",
-    "fv.prompt_expansion"
+    "fv.fps"
    ],
    "recipe": {
     "variant": "ltx25-distill-dense"
@@ -2760,8 +2722,7 @@
     ]
    },
    "knobs": [
-    "fv.fps",
-    "fv.prompt_expansion"
+    "fv.fps"
    ],
    "recipe": {
     "variant": "ltx25-distill-sol-nvfp4-taehv"
@@ -2823,7 +2784,6 @@
    },
    "knobs": [
     "fv.fps",
-    "fv.prompt_expansion",
     "fv.reference_strength"
    ],
    "recipe": {
@@ -2904,8 +2864,7 @@
    },
    "knobs": [
     "fv.fps",
-    "fv.guidance",
-    "fv.prompt_expansion"
+    "fv.guidance"
    ],
    "recipe": {
     "variant": "ltx25-a2v-guided"
@@ -2974,8 +2933,7 @@
     ]
    },
    "knobs": [
-    "fv.steps",
-    "fv.prompt_expansion"
+    "fv.steps"
    ],
    "recipe": {
     "variant": "fastwan22-ti2v-5b"
@@ -3045,8 +3003,7 @@
    },
    "knobs": [
     "fv.steps",
-    "fv.guidance",
-    "fv.prompt_expansion"
+    "fv.guidance"
    ],
    "recipe": {
     "variant": "wan22-ti2v-5b"
@@ -3115,8 +3072,7 @@
     ]
    },
    "knobs": [
-    "fv.steps",
-    "fv.prompt_expansion"
+    "fv.steps"
    ],
    "recipe": {
     "variant": "fastwan22-ti2v-5b-taehv"
@@ -3166,9 +3122,7 @@
      81
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "wan14b-plug-4step"
    },
@@ -3219,8 +3173,7 @@
     ]
    },
    "knobs": [
-    "fv.steps",
-    "fv.prompt_expansion"
+    "fv.steps"
    ],
    "recipe": {
     "variant": "fastwan21-1.3b"
@@ -3268,9 +3221,7 @@
      81
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "sfwan21-1.3b"
    },
@@ -3318,9 +3269,7 @@
      81
     ]
    },
-   "knobs": [
-    "fv.prompt_expansion"
-   ],
+   "knobs": [],
    "recipe": {
     "variant": "longlive-1.3b"
    },

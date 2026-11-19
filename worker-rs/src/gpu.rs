@@ -26,17 +26,37 @@ impl GpuInfo {
 
 pub fn query(index: u32) -> Option<GpuInfo> {
     let smi = which("nvidia-smi")?;
-    let r = Command::new(&smi).args([format!("--id={index}"), "--query-gpu=name,driver_version,memory.total,memory.free".into(), "--format=csv,noheader,nounits".into()]).output().ok()?;
+    let r = Command::new(&smi)
+        .args([
+            format!("--id={index}"),
+            "--query-gpu=name,driver_version,memory.total,memory.free".into(),
+            "--format=csv,noheader,nounits".into(),
+        ])
+        .output()
+        .ok()?;
     let out = String::from_utf8_lossy(&r.stdout);
     if !r.status.success() || out.trim().is_empty() {
         return None;
     }
-    let parts: Vec<&str> = out.trim().lines().next()?.split(',').map(str::trim).collect();
+    let parts: Vec<&str> = out
+        .trim()
+        .lines()
+        .next()?
+        .split(',')
+        .map(str::trim)
+        .collect();
     if parts.len() < 4 {
         return None;
     }
     let mut cap = None;
-    if let Ok(r2) = Command::new(&smi).args([format!("--id={index}"), "--query-gpu=compute_cap".into(), "--format=csv,noheader".into()]).output() {
+    if let Ok(r2) = Command::new(&smi)
+        .args([
+            format!("--id={index}"),
+            "--query-gpu=compute_cap".into(),
+            "--format=csv,noheader".into(),
+        ])
+        .output()
+    {
         let o = String::from_utf8_lossy(&r2.stdout);
         if r2.status.success() && !o.trim().is_empty() {
             cap = o.trim().lines().next().map(|s| s.trim().to_string());
@@ -57,9 +77,22 @@ mod tests {
 
     #[test]
     fn sm_and_free() {
-        let g = GpuInfo { name: "x".into(), driver: "580".into(), memory_total_mib: 98304, memory_free_mib: 2048, compute_cap: Some("12.0".into()) };
+        let g = GpuInfo {
+            name: "x".into(),
+            driver: "580".into(),
+            memory_total_mib: 98304,
+            memory_free_mib: 2048,
+            compute_cap: Some("12.0".into()),
+        };
         assert_eq!(g.sm(), Some(120));
         assert_eq!(g.free_gib(), 2.0);
-        assert_eq!(GpuInfo { compute_cap: None, ..g.clone() }.sm(), None);
+        assert_eq!(
+            GpuInfo {
+                compute_cap: None,
+                ..g.clone()
+            }
+            .sm(),
+            None
+        );
     }
 }

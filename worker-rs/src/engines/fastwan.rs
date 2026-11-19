@@ -17,17 +17,36 @@ pub fn run(ctx: &Ctx, job: &Job) -> JobResult<RunResult> {
     let st = ctx.settings;
     let seed = job.seed.unwrap_or_else(random_seed);
     let out = ctx.job_dir.join("out.y4m");
-    let command = flags::command_line(&flags::fastwan_generate_argv(job, st, ctx.knobs, Path::new("out.y4m"), seed)?);
+    let command = flags::command_line(&flags::fastwan_generate_argv(
+        job,
+        st,
+        ctx.knobs,
+        Path::new("out.y4m"),
+        seed,
+    )?);
     if job.model.cli_only || job.task == "long" {
         ctx.sidecars.stop_all();
         ctx.report.detail_force("loading", "fastwan (per-job CLI)");
         let argv = flags::fastwan_generate_argv(job, st, ctx.knobs, &out, seed)?;
-        let (_, t) = run_cli(&argv, &ctx.env_of(ENGINE), ctx.report, &ctx.log, 7200.0, Some(&ctx.job_dir))?;
+        let (_, t) = run_cli(
+            &argv,
+            &ctx.env_of(ENGINE),
+            ctx.report,
+            &ctx.log,
+            7200.0,
+            Some(&ctx.job_dir),
+        )?;
         if !out.is_file() {
             return Err(JobError::engine("fastwan wrote no out.y4m", vec![]));
         }
         let info = fr::read_y4m_info(&out).map_err(|e| anyhow::anyhow!("ValueError: {e}"))?;
-        let mut res = RunResult::new(seed, info.width as i64, info.height as i64, info.frames as i64, job.fps_for());
+        let mut res = RunResult::new(
+            seed,
+            info.width as i64,
+            info.height as i64,
+            info.frames as i64,
+            job.fps_for(),
+        );
         res.video_y4m = Some(out);
         res.timings = t;
         res.command = command;
@@ -43,14 +62,34 @@ pub fn run(ctx: &Ctx, job: &Job) -> JobResult<RunResult> {
     let key = flags::fastwan_serve_key(job, st, ctx.knobs)?;
     let serve_argv = flags::fastwan_serve_argv(job, st, ctx.knobs, port)?;
     let env = ctx.env_of(ENGINE);
-    let make = || Sidecar::new(ENGINE, &key, serve_argv.clone(), env.clone(), http_info_probe(&format!("{base}/api/info")));
+    let make = || {
+        Sidecar::new(
+            ENGINE,
+            &key,
+            serve_argv.clone(),
+            env.clone(),
+            http_info_probe(&format!("{base}/api/info")),
+        )
+    };
     let loading = |_: &str, t: f64| ctx.report.detail("loading", &format!("{t:.0} s"));
-    let (sc, load_s) = ctx.sidecars.ensure(ENGINE, &key, &make, job.model.vram_gib, Some(&loading))?;
+    let (sc, load_s) =
+        ctx.sidecars
+            .ensure(ENGINE, &key, &make, job.model.vram_gib, Some(&loading))?;
     let body = json!({"prompt": job.prompt, "width": job.width, "height": job.height, "frames": job.frames, "seed": seed, "upscale": job.upscale});
-    let clip = run_serve_job(&base, &sc, &body, &ctx.job_dir, ctx.report, false, 0.5, 3600.0)?;
+    let clip = run_serve_job(
+        &base,
+        &sc,
+        &body,
+        &ctx.job_dir,
+        ctx.report,
+        false,
+        0.5,
+        3600.0,
+    )?;
     ctx.report.detail_force("muxing", "frames → y4m");
     let fps = job.fps_for();
-    fr::rgb_to_y4m(&clip.rgb, clip.width, clip.height, fps, &out, None).map_err(|e| anyhow::anyhow!("RuntimeError: {e}"))?;
+    fr::rgb_to_y4m(&clip.rgb, clip.width, clip.height, fps, &out, None)
+        .map_err(|e| anyhow::anyhow!("RuntimeError: {e}"))?;
     let mut res = RunResult::new(seed, job.width, job.height, clip.frames as i64, fps);
     res.video_y4m = Some(out);
     res.timings = clip.timings.clone();

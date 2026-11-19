@@ -14,7 +14,14 @@ pub const UPSCALE_VALUES: [i64; 4] = [0, 2, 3, 4];
 pub const PROMPT_MAX_CHARS: usize = 2000;
 /// Tasks whose prompt fv-serve lets be empty (the source media carries the content).
 pub const PROMPT_OPTIONAL_TASKS: [&str; 3] = ["extend", "retake", "a2v"];
-pub const MEDIA_INPUT_KEYS: [&str; 6] = ["first_image", "last_image", "references", "audio", "video", "draft"];
+pub const MEDIA_INPUT_KEYS: [&str; 6] = [
+    "first_image",
+    "last_image",
+    "references",
+    "audio",
+    "video",
+    "draft",
+];
 pub const MAX_REFERENCES: usize = 12;
 /// Knobs any engine's model may list (`expand.prompt`: the worker handles
 /// them, no `cli` / `field`). The page sends them by short name like the others.
@@ -35,7 +42,10 @@ pub fn default_catalog_path() -> PathBuf {
         return PathBuf::from(p);
     }
     let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("../catalog/catalog.json");
-    for p in [here.clone(), PathBuf::from("/opt/studio/catalog/catalog.json")] {
+    for p in [
+        here.clone(),
+        PathBuf::from("/opt/studio/catalog/catalog.json"),
+    ] {
         if p.is_file() {
             return p;
         }
@@ -60,29 +70,57 @@ impl FrameGrid {
         let t = grid.trim();
         let (a, b) = t
             .split_once('n')
-            .and_then(|(a, rest)| rest.trim_start().strip_prefix('+').map(|b| (a.trim(), b.trim())))
+            .and_then(|(a, rest)| {
+                rest.trim_start()
+                    .strip_prefix('+')
+                    .map(|b| (a.trim(), b.trim()))
+            })
             .ok_or_else(|| anyhow::anyhow!("bad frame grid {grid:?}"))?;
-        let step: i64 = a.parse().map_err(|_| anyhow::anyhow!("bad frame grid {grid:?}"))?;
-        let offset: i64 = b.parse().map_err(|_| anyhow::anyhow!("bad frame grid {grid:?}"))?;
-        let int = |k: &str| spec[k].as_f64().map(|f| f as i64).ok_or_else(|| anyhow::anyhow!("frames.{k} missing"));
+        let step: i64 = a
+            .parse()
+            .map_err(|_| anyhow::anyhow!("bad frame grid {grid:?}"))?;
+        let offset: i64 = b
+            .parse()
+            .map_err(|_| anyhow::anyhow!("bad frame grid {grid:?}"))?;
+        let int = |k: &str| {
+            spec[k]
+                .as_f64()
+                .map(|f| f as i64)
+                .ok_or_else(|| anyhow::anyhow!("frames.{k} missing"))
+        };
         Ok(FrameGrid {
             step,
             offset,
             min: int("min")?,
             max: int("max")?,
             default: int("default")?,
-            choices: spec["choices"].as_array().map(|a| a.iter().filter_map(|c| c.as_f64().map(|f| f as i64)).collect()).unwrap_or_default(),
+            choices: spec["choices"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| c.as_f64().map(|f| f as i64))
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 
     /// None when `frames` is on the grid and in range, else why not.
     pub fn check(&self, frames: i64) -> Option<String> {
         if frames < self.min || frames > self.max {
-            return Some(format!("frames must be between {} and {}", self.min, self.max));
+            return Some(format!(
+                "frames must be between {} and {}",
+                self.min, self.max
+            ));
         }
         if (frames - self.offset).rem_euclid(self.step) != 0 {
             let eg: Vec<String> = self.choices.iter().take(4).map(|c| c.to_string()).collect();
-            return Some(format!("frames must be on the {}n+{} grid (e.g. {})", self.step, self.offset, eg.join(", ")));
+            return Some(format!(
+                "frames must be on the {}n+{} grid (e.g. {})",
+                self.step,
+                self.offset,
+                eg.join(", ")
+            ));
         }
         None
     }
@@ -119,14 +157,22 @@ impl Knob {
             default: spec.get("default").cloned().unwrap_or(Value::Null),
             options: spec["options"]
                 .as_array()
-                .map(|a| a.iter().map(|o| py_str(o.get(0).unwrap_or(&Value::Null))).collect())
+                .map(|a| {
+                    a.iter()
+                        .map(|o| py_str(o.get(0).unwrap_or(&Value::Null)))
+                        .collect()
+                })
                 .unwrap_or_default(),
             min: spec.get("min").filter(|v| !v.is_null()).cloned(),
             max: spec.get("max").filter(|v| !v.is_null()).cloned(),
             group: opt_str("group").unwrap_or_default(),
             cli: opt_str("cli"),
             fv_field: opt_str("field"),
-            when: spec.get("when").and_then(|v| v.as_object()).cloned().unwrap_or_default(),
+            when: spec
+                .get("when")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
@@ -147,7 +193,13 @@ impl Knob {
             }
             "select" => {
                 let s = match value {
-                    Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+                    Value::Bool(b) => {
+                        if *b {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        }
+                    }
                     v => py_str(v),
                 };
                 if !self.options.contains(&s) {
@@ -203,7 +255,11 @@ pub struct Task {
 
 impl Task {
     pub fn required(&self) -> Vec<&str> {
-        self.inputs.iter().filter(|i| !self.optional.contains(i)).map(String::as_str).collect()
+        self.inputs
+            .iter()
+            .filter(|i| !self.optional.contains(i))
+            .map(String::as_str)
+            .collect()
     }
 }
 
@@ -237,18 +293,34 @@ pub struct Model {
 }
 
 fn str_list(v: &Value) -> Vec<String> {
-    v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 impl Model {
     pub fn parse(spec: &Value) -> anyhow::Result<Model> {
-        let s = |k: &str| spec[k].as_str().map(str::to_string).ok_or_else(|| anyhow::anyhow!("model: {k} missing"));
+        let s = |k: &str| {
+            spec[k]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("model: {k} missing"))
+        };
         let id = s("id")?;
         let sizes: Vec<(i64, i64)> = spec["sizes"]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("model {id}: sizes missing"))?
             .iter()
-            .map(|wh| (wh[0].as_f64().unwrap_or(0.0) as i64, wh[1].as_f64().unwrap_or(0.0) as i64))
+            .map(|wh| {
+                (
+                    wh[0].as_f64().unwrap_or(0.0) as i64,
+                    wh[1].as_f64().unwrap_or(0.0) as i64,
+                )
+            })
             .collect();
         let ds = &spec["default_size"];
         Ok(Model {
@@ -257,8 +329,12 @@ impl Model {
             label: spec["label"].as_str().unwrap_or(&id).to_string(),
             tasks: str_list(&spec["tasks"]),
             sizes,
-            default_size: (ds[0].as_f64().unwrap_or(0.0) as i64, ds[1].as_f64().unwrap_or(0.0) as i64),
-            frames: FrameGrid::parse(&spec["frames"]).map_err(|e| anyhow::anyhow!("model {id}: {e}"))?,
+            default_size: (
+                ds[0].as_f64().unwrap_or(0.0) as i64,
+                ds[1].as_f64().unwrap_or(0.0) as i64,
+            ),
+            frames: FrameGrid::parse(&spec["frames"])
+                .map_err(|e| anyhow::anyhow!("model {id}: {e}"))?,
             knobs: str_list(&spec["knobs"]),
             recipe: spec["recipe"].as_object().cloned().unwrap_or_default(),
             trees: str_list(&spec["trees"]),
@@ -272,7 +348,10 @@ impl Model {
             hidden: truthy(&spec["hidden"]),
             negative_prompt: truthy(&spec["negative_prompt"]),
             aliases: str_list(&spec["aliases"]),
-            knob_defaults: spec["knob_defaults"].as_object().cloned().unwrap_or_default(),
+            knob_defaults: spec["knob_defaults"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
             tier: spec["tier"].as_str().map(str::to_string),
             verify: spec["verify"].as_str().map(str::to_string),
             raw: spec.clone(),
@@ -292,7 +371,11 @@ pub struct Media {
 
 impl Media {
     pub fn new(kind: &str, value: &str) -> Media {
-        Media { kind: kind.into(), value: value.into(), mime: None }
+        Media {
+            kind: kind.into(),
+            value: value.into(),
+            mime: None,
+        }
     }
 
     pub fn inline_bytes(&self) -> usize {
@@ -316,12 +399,24 @@ pub fn b64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {
         let n = chunk.len();
-        let b = [chunk[0], if n > 1 { chunk[1] } else { 0 }, if n > 2 { chunk[2] } else { 0 }];
+        let b = [
+            chunk[0],
+            if n > 1 { chunk[1] } else { 0 },
+            if n > 2 { chunk[2] } else { 0 },
+        ];
         let v = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(B64[(v >> 18) as usize & 63] as char);
         out.push(B64[(v >> 12) as usize & 63] as char);
-        out.push(if n > 1 { B64[(v >> 6) as usize & 63] as char } else { '=' });
-        out.push(if n > 2 { B64[v as usize & 63] as char } else { '=' });
+        out.push(if n > 1 {
+            B64[(v >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if n > 2 {
+            B64[v as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -351,7 +446,10 @@ pub fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(vals.len() * 3 / 4);
     for q in vals.chunks(4) {
         let n = q.len();
-        let v = ((q[0] as u32) << 18) | ((q[1] as u32) << 12) | ((if n > 2 { q[2] } else { 0 } as u32) << 6) | (if n > 3 { q[3] } else { 0 } as u32);
+        let v = ((q[0] as u32) << 18)
+            | ((q[1] as u32) << 12)
+            | ((if n > 2 { q[2] } else { 0 } as u32) << 6)
+            | (if n > 3 { q[3] } else { 0 } as u32);
         out.push((v >> 16) as u8);
         if n > 2 {
             out.push((v >> 8) as u8);
@@ -417,7 +515,8 @@ impl JobInputs {
 impl Job {
     /// An effective option by its short name (`weights`).
     pub fn opt(&self, short: &str) -> Option<&Value> {
-        self.options.get(&format!("{}.{}", knob_prefix(&self.engine), short))
+        self.options
+            .get(&format!("{}.{}", knob_prefix(&self.engine), short))
     }
 
     /// `job.opt(short, default)`: the option (which may be null) or the default.
@@ -430,7 +529,8 @@ impl Job {
     }
 
     pub fn is_explicit(&self, short: &str) -> bool {
-        self.explicit.contains_key(&format!("{}.{}", knob_prefix(&self.engine), short))
+        self.explicit
+            .contains_key(&format!("{}.{}", knob_prefix(&self.engine), short))
     }
 
     /// The clip's frame rate: the `fps` knob when the model has one, else the model's.
@@ -460,9 +560,15 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn new(data: Value) -> anyhow::Result<Catalog> {
-        let engines = data["engines"].as_object().cloned().ok_or_else(|| anyhow::anyhow!("catalog: engines missing"))?;
+        let engines = data["engines"]
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("catalog: engines missing"))?;
         let mut tasks = IndexMap::new();
-        for (k, v) in data["tasks"].as_object().ok_or_else(|| anyhow::anyhow!("catalog: tasks missing"))? {
+        for (k, v) in data["tasks"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("catalog: tasks missing"))?
+        {
             tasks.insert(
                 k.clone(),
                 Task {
@@ -474,7 +580,10 @@ impl Catalog {
             );
         }
         let mut knobs = IndexMap::new();
-        for (k, v) in data["knobs"].as_object().ok_or_else(|| anyhow::anyhow!("catalog: knobs missing"))? {
+        for (k, v) in data["knobs"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("catalog: knobs missing"))?
+        {
             knobs.insert(k.clone(), Knob::parse(k, v));
         }
         let models = data["models"]
@@ -485,13 +594,19 @@ impl Catalog {
             .collect::<anyhow::Result<Vec<_>>>()?;
         let c = Catalog {
             version: data.get("version").cloned().unwrap_or(Value::Null),
-            weights_root: data["weights_root"].as_str().unwrap_or("/workspace/w").to_string(),
+            weights_root: data["weights_root"]
+                .as_str()
+                .unwrap_or("/workspace/w")
+                .to_string(),
             engines,
             tasks,
             knobs,
             models,
             trees: data["trees"].as_object().cloned().unwrap_or_default(),
-            upload_limits: data["upload_limits"].as_object().cloned().unwrap_or_default(),
+            upload_limits: data["upload_limits"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
             data,
         };
         c.check()?;
@@ -499,9 +614,13 @@ impl Catalog {
     }
 
     pub fn load(path: Option<&Path>) -> anyhow::Result<Catalog> {
-        let p = path.map(Path::to_path_buf).unwrap_or_else(default_catalog_path);
-        let text = std::fs::read_to_string(&p).map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?;
-        let data: Value = serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?;
+        let p = path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(default_catalog_path);
+        let text =
+            std::fs::read_to_string(&p).map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?;
+        let data: Value =
+            serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?;
         Catalog::new(data)
     }
 
@@ -513,7 +632,9 @@ impl Catalog {
                     anyhow::bail!("catalog: model {} lists unknown knob {k}", m.id);
                 }
                 let head = k.split_once('.').map(|(h, _)| h).unwrap_or(k);
-                if !k.starts_with(&format!("{}.", knob_prefix(&m.engine))) && !SHARED_KNOB_PREFIXES.contains(&head) {
+                if !k.starts_with(&format!("{}.", knob_prefix(&m.engine)))
+                    && !SHARED_KNOB_PREFIXES.contains(&head)
+                {
                     anyhow::bail!("catalog: model {} lists knob {k} of another engine", m.id);
                 }
             }
@@ -530,11 +651,17 @@ impl Catalog {
     }
 
     pub fn inline_limit(&self) -> usize {
-        self.upload_limits.get("inline_b64_bytes").and_then(|v| v.as_f64()).map(|f| f as usize).unwrap_or(6 * 1024 * 1024)
+        self.upload_limits
+            .get("inline_b64_bytes")
+            .and_then(|v| v.as_f64())
+            .map(|f| f as usize)
+            .unwrap_or(6 * 1024 * 1024)
     }
 
     pub fn model(&self, engine: &str, model_id: &str) -> Option<&Model> {
-        self.models.iter().find(|m| m.engine == engine && (m.id == model_id || m.aliases.iter().any(|a| a == model_id)))
+        self.models.iter().find(|m| {
+            m.engine == engine && (m.id == model_id || m.aliases.iter().any(|a| a == model_id))
+        })
     }
 
     pub fn models_of(&self, engine: &str) -> Vec<&Model> {
@@ -545,7 +672,13 @@ impl Catalog {
     pub fn knob_defaults(&self, model: &Model) -> Map<String, Value> {
         let mut out = Map::new();
         for k in &model.knobs {
-            out.insert(k.clone(), self.knobs.get(k).map(|kn| kn.default.clone()).unwrap_or(Value::Null));
+            out.insert(
+                k.clone(),
+                self.knobs
+                    .get(k)
+                    .map(|kn| kn.default.clone())
+                    .unwrap_or(Value::Null),
+            );
         }
         for (k, v) in &model.knob_defaults {
             if out.contains_key(k) {
@@ -560,22 +693,49 @@ impl Catalog {
     /// A `Job` from an `op: generate` input, or `JobError(where="validate")`.
     pub fn validate(&self, inp: &Value) -> JobResult<Job> {
         let bad = |m: String| JobError::validate(m);
-        let obj = inp.as_object().ok_or_else(|| bad("input must be a JSON object".into()))?;
-        let op = obj.get("op").cloned().unwrap_or(Value::String("generate".into()));
+        let obj = inp
+            .as_object()
+            .ok_or_else(|| bad("input must be a JSON object".into()))?;
+        let op = obj
+            .get("op")
+            .cloned()
+            .unwrap_or(Value::String("generate".into()));
         if op != Value::String("generate".into()) {
             return Err(bad(format!("op {} is not generate", py_repr(&op))));
         }
-        let engine = obj.get("engine").and_then(|v| v.as_str()).filter(|e| self.engines.contains_key(*e));
-        let engine = engine.ok_or_else(|| bad(format!("engine must be one of {}", self.engines.keys().cloned().collect::<Vec<_>>().join(", "))))?;
-        let model_id = obj.get("model").and_then(|v| v.as_str()).ok_or_else(|| bad("model is required".into()))?;
-        let model = self.model(engine, model_id).ok_or_else(|| bad(format!("unknown {engine} model {}", py_str_repr(model_id))))?;
+        let engine = obj
+            .get("engine")
+            .and_then(|v| v.as_str())
+            .filter(|e| self.engines.contains_key(*e));
+        let engine = engine.ok_or_else(|| {
+            bad(format!(
+                "engine must be one of {}",
+                self.engines.keys().cloned().collect::<Vec<_>>().join(", ")
+            ))
+        })?;
+        let model_id = obj
+            .get("model")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| bad("model is required".into()))?;
+        let model = self
+            .model(engine, model_id)
+            .ok_or_else(|| bad(format!("unknown {engine} model {}", py_str_repr(model_id))))?;
         let task_id = match obj.get("task") {
             Some(v) => v.clone(),
             None => Value::String(model.tasks[0].clone()),
         };
         let task_str = task_id.as_str().map(str::to_string);
-        if task_str.as_ref().map(|t| !model.tasks.contains(t)).unwrap_or(true) {
-            return Err(bad(format!("model {} does not do task {} (it does {})", model.id, py_repr(&task_id), model.tasks.join(", "))));
+        if task_str
+            .as_ref()
+            .map(|t| !model.tasks.contains(t))
+            .unwrap_or(true)
+        {
+            return Err(bad(format!(
+                "model {} does not do task {} (it does {})",
+                model.id,
+                py_repr(&task_id),
+                model.tasks.join(", ")
+            )));
         }
         let task_id = task_str.unwrap();
         let task = &self.tasks[&task_id];
@@ -600,22 +760,45 @@ impl Catalog {
                 }
                 match v.as_str() {
                     Some(s) if s.chars().count() <= PROMPT_MAX_CHARS => Some(s.to_string()),
-                    _ => return Err(bad("negative_prompt must be a string of at most 2000 characters".into())),
+                    _ => {
+                        return Err(bad(
+                            "negative_prompt must be a string of at most 2000 characters".into(),
+                        ))
+                    }
                 }
             }
         };
 
-        let width = obj.get("width").cloned().unwrap_or(Value::from(model.default_size.0));
-        let height = obj.get("height").cloned().unwrap_or(Value::from(model.default_size.1));
+        let width = obj
+            .get("width")
+            .cloned()
+            .unwrap_or(Value::from(model.default_size.0));
+        let height = obj
+            .get("height")
+            .cloned()
+            .unwrap_or(Value::from(model.default_size.1));
         if !is_int(&width) || !is_int(&height) {
             return Err(bad("width and height must be integers".into()));
         }
         let (w, h) = (width.as_i64().unwrap_or(-1), height.as_i64().unwrap_or(-1));
         if !model.sizes.contains(&(w, h)) {
-            let sizes: Vec<String> = model.sizes.iter().map(|(w, h)| format!("{w}x{h}")).collect();
-            return Err(bad(format!("{}x{} is not one of {}'s sizes ({})", py_str(&width), py_str(&height), model.id, sizes.join(", "))));
+            let sizes: Vec<String> = model
+                .sizes
+                .iter()
+                .map(|(w, h)| format!("{w}x{h}"))
+                .collect();
+            return Err(bad(format!(
+                "{}x{} is not one of {}'s sizes ({})",
+                py_str(&width),
+                py_str(&height),
+                model.id,
+                sizes.join(", ")
+            )));
         }
-        let frames = obj.get("frames").cloned().unwrap_or(Value::from(model.frames.default));
+        let frames = obj
+            .get("frames")
+            .cloned()
+            .unwrap_or(Value::from(model.frames.default));
         if !is_int(&frames) {
             return Err(bad("frames must be an integer".into()));
         }
@@ -634,8 +817,17 @@ impl Catalog {
         };
 
         let empty = Value::Object(Map::new());
-        let inputs = self.validate_inputs(obj.get("inputs").filter(|v| !v.is_null()).unwrap_or(&empty), task, model)?;
-        let mut explicit = self.validate_options(obj.get("options").filter(|v| !v.is_null()).unwrap_or(&empty), model)?;
+        let inputs = self.validate_inputs(
+            obj.get("inputs").filter(|v| !v.is_null()).unwrap_or(&empty),
+            task,
+            model,
+        )?;
+        let mut explicit = self.validate_options(
+            obj.get("options")
+                .filter(|v| !v.is_null())
+                .unwrap_or(&empty),
+            model,
+        )?;
         let mut options = self.knob_defaults(model);
         for (k, v) in &explicit {
             options.insert(k.clone(), v.clone());
@@ -655,12 +847,18 @@ impl Catalog {
                         explicit.shift_remove(&kid);
                         options.insert(kid.clone(), knob.default.clone());
                     } else {
-                        return Err(bad(format!("option {} applies only when {dep_short} is {} (it is {})", knob.short(), py_repr(want), py_repr(&have))));
+                        return Err(bad(format!(
+                            "option {} applies only when {dep_short} is {} (it is {})",
+                            knob.short(),
+                            py_repr(want),
+                            py_repr(&have)
+                        )));
                     }
                 }
             }
         }
-        let upscale = self.validate_upscale(obj.get("upscale"), &mut options, model, &mut explicit)?;
+        let upscale =
+            self.validate_upscale(obj.get("upscale"), &mut options, model, &mut explicit)?;
         Ok(Job {
             engine: engine.to_string(),
             model: model.clone(),
@@ -681,13 +879,19 @@ impl Catalog {
 
     fn validate_inputs(&self, raw: &Value, task: &Task, _model: &Model) -> JobResult<JobInputs> {
         let bad = |m: String| JobError::validate(m);
-        let raw = raw.as_object().ok_or_else(|| bad("inputs must be an object".into()))?;
+        let raw = raw
+            .as_object()
+            .ok_or_else(|| bad("inputs must be an object".into()))?;
         for k in raw.keys() {
             if !MEDIA_INPUT_KEYS.contains(&k.as_str()) {
                 return Err(bad(format!("unknown input {}", py_str_repr(k))));
             }
             if !task.inputs.contains(k) {
-                return Err(bad(format!("task {} takes no input {}", task.id, py_str_repr(k))));
+                return Err(bad(format!(
+                    "task {} takes no input {}",
+                    task.id,
+                    py_str_repr(k)
+                )));
             }
         }
         for k in task.required() {
@@ -698,7 +902,11 @@ impl Catalog {
                 _ => false,
             };
             if missing {
-                return Err(bad(format!("task {} needs input {}", task.id, py_str_repr(k))));
+                return Err(bad(format!(
+                    "task {} needs input {}",
+                    task.id,
+                    py_str_repr(k)
+                )));
             }
         }
         let mut out = JobInputs::default();
@@ -707,7 +915,10 @@ impl Catalog {
                 continue;
             }
             if k == "references" {
-                let list = v.as_array().filter(|a| !a.is_empty()).ok_or_else(|| bad("references must be a non-empty list of media".into()))?;
+                let list = v
+                    .as_array()
+                    .filter(|a| !a.is_empty())
+                    .ok_or_else(|| bad("references must be a non-empty list of media".into()))?;
                 if list.len() > MAX_REFERENCES {
                     return Err(bad(format!("at most {MAX_REFERENCES} references")));
                 }
@@ -734,13 +945,20 @@ impl Catalog {
 
     fn validate_media(&self, v: &Value, what: &str) -> JobResult<Media> {
         let bad = |m: String| JobError::validate(m);
-        let o = v.as_object().ok_or_else(|| bad(format!("{what} must be a media object")))?;
-        let keys: Vec<&str> = ["url", "b64", "r2"].into_iter().filter(|k| o.get(*k).map(truthy).unwrap_or(false)).collect();
+        let o = v
+            .as_object()
+            .ok_or_else(|| bad(format!("{what} must be a media object")))?;
+        let keys: Vec<&str> = ["url", "b64", "r2"]
+            .into_iter()
+            .filter(|k| o.get(*k).map(truthy).unwrap_or(false))
+            .collect();
         if keys.len() != 1 {
             return Err(bad(format!("{what} must have exactly one of url, b64, r2")));
         }
         let kind = keys[0];
-        let value = o[kind].as_str().ok_or_else(|| bad(format!("{what}.{kind} must be a string")))?;
+        let value = o[kind]
+            .as_str()
+            .ok_or_else(|| bad(format!("{what}.{kind} must be a string")))?;
         if kind == "url" {
             if !value.starts_with("https://") {
                 return Err(bad(format!("{what}.url must be https://")));
@@ -757,29 +975,50 @@ impl Catalog {
             Some(m) if m.contains('/') => m.to_string(),
             _ => return Err(bad(format!("{what}.mime is required with b64"))),
         };
-        let m = Media { kind: "b64".into(), value: value.into(), mime: Some(mime) };
+        let m = Media {
+            kind: "b64".into(),
+            value: value.into(),
+            mime: Some(mime),
+        };
         if m.inline_bytes() > self.inline_limit() {
-            return Err(bad(format!("{what} inline data is over the {} MiB limit; upload it instead", self.inline_limit() / (1024 * 1024))));
+            return Err(bad(format!(
+                "{what} inline data is over the {} MiB limit; upload it instead",
+                self.inline_limit() / (1024 * 1024)
+            )));
         }
         Ok(m)
     }
 
     fn validate_options(&self, raw: &Value, model: &Model) -> JobResult<Map<String, Value>> {
         let bad = |m: String| JobError::validate(m);
-        let raw = raw.as_object().ok_or_else(|| bad("options must be an object".into()))?;
+        let raw = raw
+            .as_object()
+            .ok_or_else(|| bad("options must be an object".into()))?;
         let prefix = knob_prefix(&model.engine);
         let mut out = Map::new();
         for (key, value) in raw {
-            let mut kid = if key.contains('.') { key.clone() } else { format!("{prefix}.{key}") };
+            let mut kid = if key.contains('.') {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
             if !model.knobs.contains(&kid) {
                 // A shared knob by its short name (`prompt` → `expand.prompt`).
                 let shared: Vec<&String> = model
                     .knobs
                     .iter()
-                    .filter(|k| k.split_once('.').map(|(h, s)| SHARED_KNOB_PREFIXES.contains(&h) && s == key).unwrap_or(false))
+                    .filter(|k| {
+                        k.split_once('.')
+                            .map(|(h, s)| SHARED_KNOB_PREFIXES.contains(&h) && s == key)
+                            .unwrap_or(false)
+                    })
                     .collect();
                 if shared.len() != 1 {
-                    return Err(bad(format!("model {} has no option {}", model.id, py_str_repr(key))));
+                    return Err(bad(format!(
+                        "model {} has no option {}",
+                        model.id,
+                        py_str_repr(key)
+                    )));
                 }
                 kid = shared[0].clone();
             }
@@ -799,15 +1038,28 @@ impl Catalog {
 
     /// Top-level `upscale: 0|2|3|4` (jobs.md). The `*.upscale_factor` knob
     /// is the page's control for it: accepted in `options` and ignored.
-    fn validate_upscale(&self, raw: Option<&Value>, options: &mut Map<String, Value>, model: &Model, explicit: &mut Map<String, Value>) -> JobResult<i64> {
+    fn validate_upscale(
+        &self,
+        raw: Option<&Value>,
+        options: &mut Map<String, Value>,
+        model: &Model,
+        explicit: &mut Map<String, Value>,
+    ) -> JobResult<i64> {
         let bad = |m: String| JobError::validate(m);
         let kid = format!("{}.upscale_factor", knob_prefix(&model.engine));
         explicit.shift_remove(&kid);
         let factor = match raw {
             None | Some(Value::Null) | Some(Value::Bool(false)) => 0,
-            Some(Value::Bool(true)) => return Err(bad("upscale must be 0, 2, 3 or 4 (not true)".into())),
+            Some(Value::Bool(true)) => {
+                return Err(bad("upscale must be 0, 2, 3 or 4 (not true)".into()))
+            }
             Some(v) => {
-                if !is_int(v) || !v.as_i64().map(|i| UPSCALE_VALUES.contains(&i)).unwrap_or(false) {
+                if !is_int(v)
+                    || !v
+                        .as_i64()
+                        .map(|i| UPSCALE_VALUES.contains(&i))
+                        .unwrap_or(false)
+                {
                     return Err(bad("upscale must be 0, 2, 3 or 4".into()));
                 }
                 v.as_i64().unwrap()
@@ -819,8 +1071,16 @@ impl Catalog {
             }
             let opts = &self.knobs[&kid].options;
             if !opts.contains(&factor.to_string()) {
-                let list: Vec<&str> = opts.iter().filter(|o| *o != "0").map(String::as_str).collect();
-                return Err(bad(format!("model {} upscales by {} only", model.id, list.join(", "))));
+                let list: Vec<&str> = opts
+                    .iter()
+                    .filter(|o| *o != "0")
+                    .map(String::as_str)
+                    .collect();
+                return Err(bad(format!(
+                    "model {} upscales by {} only",
+                    model.id,
+                    list.join(", ")
+                )));
             }
         }
         if model.knobs.contains(&kid) {
@@ -838,7 +1098,10 @@ pub mod tests {
     use serde_json::json;
 
     pub fn catalog() -> Catalog {
-        Catalog::load(Some(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../catalog/catalog.json"))).unwrap()
+        Catalog::load(Some(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../catalog/catalog.json"),
+        ))
+        .unwrap()
     }
 
     fn good() -> Value {
@@ -861,7 +1124,14 @@ pub mod tests {
             let task = &m.tasks[0];
             let mut inputs = Map::new();
             for k in c.tasks[task].required() {
-                inputs.insert(k.to_string(), if k == "references" { json!([{"url": "https://e/x.png"}]) } else { json!({"url": "https://e/x.mp4"}) });
+                inputs.insert(
+                    k.to_string(),
+                    if k == "references" {
+                        json!([{"url": "https://e/x.png"}])
+                    } else {
+                        json!({"url": "https://e/x.mp4"})
+                    },
+                );
             }
             let j = c.validate(&json!({"engine": m.engine, "model": m.id, "task": task, "prompt": "p", "inputs": inputs})).unwrap();
             assert_eq!((j.width, j.height), m.default_size);
@@ -879,7 +1149,10 @@ pub mod tests {
         assert_eq!(j.model.id, "fasth3-v2");
         assert_eq!(j.seed, Some(7));
         assert_eq!(j.upscale, 0);
-        assert_eq!(Value::Object(j.explicit.clone()), json!({"h3.weights": "mxfp8", "h3.pv8": true}));
+        assert_eq!(
+            Value::Object(j.explicit.clone()),
+            json!({"h3.weights": "mxfp8", "h3.pv8": true})
+        );
         assert_eq!(j.options["h3.decoder_weights"], json!("mxfp8"));
         assert_eq!(j.client, json!({"job": "x"}));
     }
@@ -887,9 +1160,15 @@ pub mod tests {
     #[test]
     fn alias_resolves_and_full_ids() {
         let c = catalog();
-        let j = c.validate(&patched(json!({"model": "draft", "width": 832, "height": 480}))).unwrap();
+        let j = c
+            .validate(&patched(
+                json!({"model": "draft", "width": 832, "height": 480}),
+            ))
+            .unwrap();
         assert_eq!(j.model.id, "h3-plug4");
-        let j = c.validate(&patched(json!({"options": {"h3.weights": "native"}}))).unwrap();
+        let j = c
+            .validate(&patched(json!({"options": {"h3.weights": "native"}})))
+            .unwrap();
         assert_eq!(j.options["h3.weights"], json!("native"));
     }
 
@@ -918,7 +1197,10 @@ pub mod tests {
             (json!({"seed": -1}), "seed"),
             (json!({"op": "warm"}), "generate"),
         ] {
-            let e = c.validate(&patched(patch.clone())).err().unwrap_or_else(|| panic!("{patch} accepted"));
+            let e = c
+                .validate(&patched(patch.clone()))
+                .err()
+                .unwrap_or_else(|| panic!("{patch} accepted"));
             assert_eq!(e.where_, "validate");
             assert!(e.message.contains(needle), "{patch}: {}", e.message);
         }
@@ -930,20 +1212,39 @@ pub mod tests {
         let j = c.validate(&patched(json!({"options": {"attention": "auto", "vsa_sparsity": 0.9, "dense_first_steps": 0}}))).unwrap();
         assert_eq!(j.explicit["h3.vsa_sparsity"], json!(0.9));
         assert!(j.explicit.contains_key("h3.dense_first_steps"));
-        let j = c.validate(&patched(json!({"options": {"attention": "dense", "vsa_sparsity": 0.8}}))).unwrap();
+        let j = c
+            .validate(&patched(
+                json!({"options": {"attention": "dense", "vsa_sparsity": 0.8}}),
+            ))
+            .unwrap();
         assert!(!j.explicit.contains_key("h3.vsa_sparsity"));
-        let e = c.validate(&patched(json!({"options": {"attention": "dense", "vsa_sparsity": 0.9}}))).unwrap_err();
+        let e = c
+            .validate(&patched(
+                json!({"options": {"attention": "dense", "vsa_sparsity": 0.9}}),
+            ))
+            .unwrap_err();
         assert!(e.message.contains("applies only when"), "{}", e.message);
-        assert_eq!(e.message, "option vsa_sparsity applies only when attention is 'vsa' (it is 'dense')");
+        assert_eq!(
+            e.message,
+            "option vsa_sparsity applies only when attention is 'vsa' (it is 'dense')"
+        );
     }
 
     #[test]
     fn upscale_is_top_level_and_the_knob_is_ignored() {
         let c = catalog();
-        let j = c.validate(&patched(json!({"upscale": 2, "options": {"upscale_factor": "4"}}))).unwrap();
+        let j = c
+            .validate(&patched(
+                json!({"upscale": 2, "options": {"upscale_factor": "4"}}),
+            ))
+            .unwrap();
         assert_eq!(j.upscale, 2);
         assert!(!j.explicit.contains_key("h3.upscale_factor"));
-        let e = c.validate(&json!({"engine": "fastwan", "model": "fastwan-1.3b", "prompt": "p", "upscale": 3})).unwrap_err();
+        let e = c
+            .validate(
+                &json!({"engine": "fastwan", "model": "fastwan-1.3b", "prompt": "p", "upscale": 3}),
+            )
+            .unwrap_err();
         assert!(e.message.contains("upscales by 2, 4"), "{}", e.message);
         let e = c.validate(&json!({"engine": "fastvideo", "model": "ltx25-distill-sol", "prompt": "p", "upscale": 2})).unwrap_err();
         assert!(e.message.contains("no upscaler"));
@@ -958,20 +1259,54 @@ pub mod tests {
             b["inputs"] = inputs;
             b
         };
-        assert!(c.validate(&base).unwrap_err().message.contains("needs input 'first_image'"));
-        let j = c.validate(&with(json!({"first_image": {"url": "https://e/a.png"}}))).unwrap();
+        assert!(c
+            .validate(&base)
+            .unwrap_err()
+            .message
+            .contains("needs input 'first_image'"));
+        let j = c
+            .validate(&with(json!({"first_image": {"url": "https://e/a.png"}})))
+            .unwrap();
         assert_eq!(j.inputs.first_image.as_ref().unwrap().kind, "url");
         assert!(j.inputs.last_image.is_none());
-        assert!(c.validate(&with(json!({"first_image": {"url": "http://e/a.png"}}))).unwrap_err().message.contains("https"));
-        assert!(c.validate(&with(json!({"first_image": {"url": "https://e/a.png", "r2": "uploads/x"}}))).unwrap_err().message.contains("exactly one"));
-        assert!(c.validate(&with(json!({"first_image": {"r2": "jobs/x/video.mp4"}}))).unwrap_err().message.contains("uploads/"));
+        assert!(c
+            .validate(&with(json!({"first_image": {"url": "http://e/a.png"}})))
+            .unwrap_err()
+            .message
+            .contains("https"));
+        assert!(c
+            .validate(&with(
+                json!({"first_image": {"url": "https://e/a.png", "r2": "uploads/x"}})
+            ))
+            .unwrap_err()
+            .message
+            .contains("exactly one"));
+        assert!(c
+            .validate(&with(json!({"first_image": {"r2": "jobs/x/video.mp4"}})))
+            .unwrap_err()
+            .message
+            .contains("uploads/"));
         assert!(c.validate(&with(json!({"first_image": {"url": "https://e/a.png"}, "audio": {"url": "https://e/a.wav"}}))).unwrap_err().message.contains("takes no input"));
         let small = b64_encode(&[b'x'; 100]);
-        let j = c.validate(&with(json!({"first_image": {"b64": small, "mime": "image/png"}}))).unwrap();
+        let j = c
+            .validate(&with(
+                json!({"first_image": {"b64": small, "mime": "image/png"}}),
+            ))
+            .unwrap();
         assert_eq!(j.inputs.first_image.as_ref().unwrap().inline_bytes(), 100);
         let big = b64_encode(&vec![b'x'; c.inline_limit() + 1]);
-        assert!(c.validate(&with(json!({"first_image": {"b64": big, "mime": "image/png"}}))).unwrap_err().message.contains("MiB limit"));
-        assert!(c.validate(&with(json!({"first_image": {"b64": small}}))).unwrap_err().message.contains("mime"));
+        assert!(c
+            .validate(&with(
+                json!({"first_image": {"b64": big, "mime": "image/png"}})
+            ))
+            .unwrap_err()
+            .message
+            .contains("MiB limit"));
+        assert!(c
+            .validate(&with(json!({"first_image": {"b64": small}})))
+            .unwrap_err()
+            .message
+            .contains("mime"));
     }
 
     #[test]
@@ -983,18 +1318,35 @@ pub mod tests {
             b["inputs"] = inputs;
             b
         };
-        let j = c.validate(&with(json!({"references": [{"url": "https://e/a.png"}, {"r2": "uploads/b.mp4"}]}))).unwrap();
-        assert_eq!(j.inputs.references.iter().map(|m| m.kind.as_str()).collect::<Vec<_>>(), ["url", "r2"]);
+        let j = c
+            .validate(&with(
+                json!({"references": [{"url": "https://e/a.png"}, {"r2": "uploads/b.mp4"}]}),
+            ))
+            .unwrap();
+        assert_eq!(
+            j.inputs
+                .references
+                .iter()
+                .map(|m| m.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["url", "r2"]
+        );
         let e = c.validate(&with(json!({"references": []}))).unwrap_err();
         assert!(e.message.contains("needs input") || e.message.contains("non-empty"));
         let many: Vec<Value> = (0..13).map(|_| json!({"url": "https://e/a.png"})).collect();
-        assert!(c.validate(&with(json!({"references": many}))).unwrap_err().message.contains("at most 12"));
+        assert!(c
+            .validate(&with(json!({"references": many})))
+            .unwrap_err()
+            .message
+            .contains("at most 12"));
     }
 
     #[test]
     fn fastvideo_null_default_knobs_absent_unless_set() {
         let c = catalog();
-        let j = c.validate(&json!({"engine": "fastvideo", "model": "wan22-ti2v-5b", "prompt": "p"})).unwrap();
+        let j = c
+            .validate(&json!({"engine": "fastvideo", "model": "wan22-ti2v-5b", "prompt": "p"}))
+            .unwrap();
         assert!(j.options["fv.steps"].is_null() && j.explicit.is_empty());
         let j = c.validate(&json!({"engine": "fastvideo", "model": "wan22-ti2v-5b", "prompt": "p", "options": {"steps": 20}})).unwrap();
         assert_eq!(Value::Object(j.explicit), json!({"fv.steps": 20}));
@@ -1002,7 +1354,10 @@ pub mod tests {
 
     #[test]
     fn frame_grid() {
-        let g = FrameGrid::parse(&json!({"grid": "12n+9", "min": 57, "max": 969, "default": 165, "choices": [165]})).unwrap();
+        let g = FrameGrid::parse(
+            &json!({"grid": "12n+9", "min": 57, "max": 969, "default": 165, "choices": [165]}),
+        )
+        .unwrap();
         assert!(g.check(165).is_none() && g.check(57).is_none());
         assert!(g.check(166).unwrap().contains("12n+9"));
         assert!(g.check(45).unwrap().contains("between"));

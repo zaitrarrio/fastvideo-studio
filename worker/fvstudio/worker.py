@@ -392,7 +392,7 @@ class Worker:
             env={e: self.env_for(e) for e in ("h3", "fastwan", "fastvideo")}, job_dir=job_dir,
             store=self.store, bucket=self.bucket, log=self.log, report=report,
             fv_serve_bin=self.cfg.fv_serve_bin, fv_config=self.cfg.fv_config, fv_state_dir=self.cfg.fv_state_dir,
-            fv_weights=str(self.roots.link_root), fv_fake=self.cfg.fv_fake,
+            fv_weights=str(self.roots.link_root), fv_fake=self.cfg.fv_fake, models=self.catalog.models,
         )
 
     def _finish(self, job_id: str, job: Job, res: RunResult, job_dir: Path, report: Reporter, t_start: float, *,

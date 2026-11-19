@@ -59,7 +59,11 @@ pub fn process_env() -> EnvMap {
 pub fn tempdir(tag: &str) -> std::path::PathBuf {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let p = std::env::temp_dir().join(format!("fvstudio-{tag}-{}-{}-{n}", std::process::id(), now_s().to_bits()));
+    let p = std::env::temp_dir().join(format!(
+        "fvstudio-{tag}-{}-{}-{n}",
+        std::process::id(),
+        now_s().to_bits()
+    ));
     std::fs::create_dir_all(&p).unwrap();
     p
 }

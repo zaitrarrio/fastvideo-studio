@@ -20,11 +20,21 @@ pub struct JobError {
 
 impl JobError {
     pub fn new(where_: Where, message: impl Into<String>) -> Self {
-        JobError { where_, message: message.into(), log_tail: Vec::new(), crash: false }
+        JobError {
+            where_,
+            message: message.into(),
+            log_tail: Vec::new(),
+            crash: false,
+        }
     }
 
     pub fn with_tail(where_: Where, message: impl Into<String>, tail: Vec<String>) -> Self {
-        JobError { where_, message: message.into(), log_tail: tail, crash: false }
+        JobError {
+            where_,
+            message: message.into(),
+            log_tail: tail,
+            crash: false,
+        }
     }
 
     pub fn validate(message: impl Into<String>) -> Self {
@@ -63,13 +73,23 @@ impl From<anyhow::Error> for JobError {
         if let Some(j) = e.downcast_ref::<JobError>() {
             return j.clone();
         }
-        JobError { where_: "engine", message: format!("{e:#}"), log_tail: Vec::new(), crash: true }
+        JobError {
+            where_: "engine",
+            message: format!("{e:#}"),
+            log_tail: Vec::new(),
+            crash: true,
+        }
     }
 }
 
 impl From<std::io::Error> for JobError {
     fn from(e: std::io::Error) -> Self {
-        JobError { where_: "engine", message: format!("OSError: {e}"), log_tail: Vec::new(), crash: true }
+        JobError {
+            where_: "engine",
+            message: format!("OSError: {e}"),
+            log_tail: Vec::new(),
+            crash: true,
+        }
     }
 }
 

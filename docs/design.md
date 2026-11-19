@@ -42,8 +42,17 @@ browser ── Studio page (static) ── Studio Worker (Cloudflare, holds the 
   R2 URLs (the `/run` output cap is 10 MB; an MP4 is not).
 - **Sidecars**: `h3 serve` and `fastwan serve` are kept resident, keyed by
   `(engine, model, recipe)`; a job for another model restarts that engine's
-  sidecar (h3: ~2 min from staged weights). `fv-serve` runs once with
-  `engine.swap = true` and every variant `resident = false`, bound to
+  sidecar (h3: ~2 min from staged weights). `fv-serve` runs one process per
+  **process group** (the catalog's `recipe.process`: `h3`, `ltx`, `ti2v-5b`,
+  `wan14b`, `fastwan21`, `streaming`): fv-serve refuses one process for
+  models whose process-wide settings differ (H3's `FASTVIDEO_BF16_ACT=1`
+  against LTX, FastWan 2.1's VSA flag against the Wan 2.2 TI2V recipe) and
+  serves a family from one process with `engine.swap = true`, as
+  fastvideo-rs's own `runpod-family-{h3,ltx,streaming}.toml` do. The
+  worker writes the group's `[[models]]` with the requested model `resident
+  = true` and the others `resident = false` (loaded on demand, swapping the
+  resident DiT out), keyed `fv-serve:<process>`: a job for another model of
+  the same group keeps the process; another group restarts it. Bound to
   127.0.0.1 with `auth.mode = none`, started directly (not through fv-boot:
   the handler does the volume link and weights itself). Before starting a
   sidecar the handler checks free VRAM (`nvidia-smi`) against the catalog's

@@ -18,12 +18,16 @@ fn main() {
     let mut test_input: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--test-input" | "--test_input" => test_input = Some(args.next().unwrap_or_else(|| usage())),
+            "--test-input" | "--test_input" => {
+                test_input = Some(args.next().unwrap_or_else(|| usage()))
+            }
             "-h" | "--help" => {
                 println!("fastvideo-studio RunPod worker\n\nusage: studio-worker [--test-input FILE]\n\n  --test-input FILE  run this one job ({{\"input\": …}}) locally and exit, as the SDK's --test_input did");
                 return;
             }
-            s if s.starts_with("--test-input=") || s.starts_with("--test_input=") => test_input = Some(s.split_once('=').unwrap().1.to_string()),
+            s if s.starts_with("--test-input=") || s.starts_with("--test_input=") => {
+                test_input = Some(s.split_once('=').unwrap().1.to_string())
+            }
             _ => usage(),
         }
     }
@@ -47,14 +51,28 @@ fn main() {
         let w = worker.clone();
         let handler = move |job: &serde_json::Value| {
             let id = fvstudio::py::py_str(&job["id"]);
-            let progress = move |rec: &serde_json::Value| rp::stderr(&format!("progress {id}: {}", fvstudio::py::dumps(rec, None, false)));
+            let progress = move |rec: &serde_json::Value| {
+                rp::stderr(&format!(
+                    "progress {id}: {}",
+                    fvstudio::py::dumps(rec, None, false)
+                ))
+            };
             w.handle(job, Some(&progress))
         };
-        let code = rp::run_local(&handler, test_input.as_deref(), &log, &mut std::io::stdout());
+        let code = rp::run_local(
+            &handler,
+            test_input.as_deref(),
+            &log,
+            &mut std::io::stdout(),
+        );
         worker.sidecars.stop_all();
         std::process::exit(code);
     }
-    let client = rp::RunpodClient::new(runpod.unwrap(), log.clone(), Arc::new(|s| std::thread::sleep(std::time::Duration::from_secs_f64(s))));
+    let client = rp::RunpodClient::new(
+        runpod.unwrap(),
+        log.clone(),
+        Arc::new(|s| std::thread::sleep(std::time::Duration::from_secs_f64(s))),
+    );
     let w = worker.clone();
     let c = client.clone();
     let handler = move |job: &serde_json::Value| {
@@ -63,7 +81,16 @@ fn main() {
         let progress = move |rec: &serde_json::Value| c.progress_update(&id, rec);
         w.handle(job, Some(&progress))
     };
-    log(&format!("fastvideo-studio worker: catalog {} ({} models), image {}", worker.cfg.catalog_path.display(), worker.catalog.models.len(), if worker.cfg.image.is_empty() { "?" } else { &worker.cfg.image }));
+    log(&format!(
+        "fastvideo-studio worker: catalog {} ({} models), image {}",
+        worker.cfg.catalog_path.display(),
+        worker.catalog.models.len(),
+        if worker.cfg.image.is_empty() {
+            "?"
+        } else {
+            &worker.cfg.image
+        }
+    ));
     let stop = Arc::new(AtomicBool::new(false));
     rp::install_signal_handlers(stop.clone(), log.clone());
     rp::serve(&handler, &client, stop, None, 0.2);

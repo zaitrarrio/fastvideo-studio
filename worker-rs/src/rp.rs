@@ -65,16 +65,26 @@ pub struct RunpodEnv {
 impl RunpodEnv {
     /// `None` when `RUNPOD_WEBHOOK_GET_JOB` is unset (the SDK's local mode).
     pub fn from_env(e: &EnvMap) -> Result<Option<RunpodEnv>, String> {
-        let get = |k: &str| e.get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-        let Some(get_job) = get("RUNPOD_WEBHOOK_GET_JOB") else { return Ok(None) };
-        let post_output = get("RUNPOD_WEBHOOK_POST_OUTPUT").ok_or_else(|| "RUNPOD_WEBHOOK_POST_OUTPUT is not set".to_string())?;
-        let ping_ms: i64 = get("RUNPOD_PING_INTERVAL").and_then(|v| v.parse().ok()).unwrap_or(10000);
+        let get = |k: &str| {
+            e.get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let Some(get_job) = get("RUNPOD_WEBHOOK_GET_JOB") else {
+            return Ok(None);
+        };
+        let post_output = get("RUNPOD_WEBHOOK_POST_OUTPUT")
+            .ok_or_else(|| "RUNPOD_WEBHOOK_POST_OUTPUT is not set".to_string())?;
+        let ping_ms: i64 = get("RUNPOD_PING_INTERVAL")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10000);
         Ok(Some(RunpodEnv {
             get_job,
             post_output,
             ping: get("RUNPOD_WEBHOOK_PING"),
             api_key: get("RUNPOD_AI_API_KEY").unwrap_or_default(),
-            worker_id: get("RUNPOD_POD_ID").unwrap_or_else(|| format!("local-{}", std::process::id())),
+            worker_id: get("RUNPOD_POD_ID")
+                .unwrap_or_else(|| format!("local-{}", std::process::id())),
             ping_interval_s: ping_ms.max(100) as f64 / 1000.0,
             hostname: get("RUNPOD_POD_HOSTNAME").or_else(|| get("HOSTNAME")),
         }))
@@ -82,13 +92,22 @@ impl RunpodEnv {
 
     /// `GET` job-take (`$ID` is the worker here).
     pub fn take_url(&self, in_progress: bool) -> String {
-        let base = self.get_job.replace("$RUNPOD_POD_ID", &self.worker_id).replace("$ID", &self.worker_id);
-        join_query(&base, &format!("job_in_progress={}", if in_progress { 1 } else { 0 }))
+        let base = self
+            .get_job
+            .replace("$RUNPOD_POD_ID", &self.worker_id)
+            .replace("$ID", &self.worker_id);
+        join_query(
+            &base,
+            &format!("job_in_progress={}", if in_progress { 1 } else { 0 }),
+        )
     }
 
     /// `POST` job-done, for progress and the result alike (`isStream=false`).
     pub fn done_url(&self, job_id: &str) -> String {
-        let base = self.post_output.replace("$RUNPOD_POD_ID", &self.worker_id).replace("$ID", job_id);
+        let base = self
+            .post_output
+            .replace("$RUNPOD_POD_ID", &self.worker_id)
+            .replace("$ID", job_id);
         join_query(&base, "isStream=false")
     }
 
@@ -139,7 +158,7 @@ impl RunpodClient {
             env,
             log,
             sleep,
-            take_timeout_s: 90.0,  // the SDK's job-take long poll
+            take_timeout_s: 90.0, // the SDK's job-take long poll
             post_timeout_s: 60.0,
             done_attempts: 3,
             done_backoff_s: vec![1.0, 1.0, 2.0], // Fibonacci, like the SDK's aiohttp_retry
@@ -148,12 +167,18 @@ impl RunpodClient {
             pending: Arc::new((Mutex::new(0), Condvar::new())),
             progress_sent: AtomicUsize::new(0),
             progress_failed: AtomicUsize::new(0),
-            agent: ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(15)).build(),
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(15))
+                .build(),
         })
     }
 
     pub fn with_defaults(env: RunpodEnv) -> Arc<RunpodClient> {
-        Self::new(env, crate::stderr_log(), Arc::new(|s| std::thread::sleep(Duration::from_secs_f64(s))))
+        Self::new(
+            env,
+            crate::stderr_log(),
+            Arc::new(|s| std::thread::sleep(Duration::from_secs_f64(s))),
+        )
     }
 
     pub fn current_job(&self) -> Option<String> {
@@ -166,15 +191,30 @@ impl RunpodClient {
 
     // ---- HTTP -------------------------------------------------------------------
 
-    fn request(&self, method: &str, url: &str, body: Option<&Value>, job_id: Option<&str>, timeout: Option<f64>) -> Result<(u16, Vec<u8>), String> {
-        let mut req = self.agent.request(method, url).set("Authorization", &self.env.api_key).timeout(Duration::from_secs_f64(timeout.unwrap_or(self.post_timeout_s)));
+    fn request(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<&Value>,
+        job_id: Option<&str>,
+        timeout: Option<f64>,
+    ) -> Result<(u16, Vec<u8>), String> {
+        let mut req = self
+            .agent
+            .request(method, url)
+            .set("Authorization", &self.env.api_key)
+            .timeout(Duration::from_secs_f64(
+                timeout.unwrap_or(self.post_timeout_s),
+            ));
         if let Some(j) = job_id {
             req = req.set("X-Request-ID", j);
         }
         let r = match body {
             Some(b) => {
                 let data = dumps(b, None, false);
-                req.set("Content-Type", "application/x-www-form-urlencoded").set("charset", "utf-8").send_string(&data)
+                req.set("Content-Type", "application/x-www-form-urlencoded")
+                    .set("charset", "utf-8")
+                    .send_string(&data)
             }
             None => req.call(),
         };
@@ -182,7 +222,10 @@ impl RunpodClient {
             Ok(resp) => {
                 let status = resp.status();
                 let mut v = Vec::new();
-                resp.into_reader().take(64 << 20).read_to_end(&mut v).map_err(|e| e.to_string())?;
+                resp.into_reader()
+                    .take(64 << 20)
+                    .read_to_end(&mut v)
+                    .map_err(|e| e.to_string())?;
                 Ok((status, v))
             }
             Err(ureq::Error::Status(code, resp)) => {
@@ -198,7 +241,9 @@ impl RunpodClient {
     /// `TooManyRequests` on 429, `Failed` on any other status or a transport error.
     pub fn take(&self) -> Result<Vec<Value>, TakeError> {
         let url = self.env.take_url(self.current_job().is_some());
-        let (status, body) = self.request("GET", &url, None, None, Some(self.take_timeout_s)).map_err(TakeError::Failed)?;
+        let (status, body) = self
+            .request("GET", &url, None, None, Some(self.take_timeout_s))
+            .map_err(TakeError::Failed)?;
         if status == 204 || status == 400 {
             // 400 is expected under FlashBoot
             return Ok(Vec::new());
@@ -207,12 +252,16 @@ impl RunpodClient {
             return Err(TakeError::TooManyRequests);
         }
         if !(200..300).contains(&status) {
-            return Err(TakeError::Failed(format!("job-take: HTTP {status}: {}", crate::py::py_str_repr(&String::from_utf8_lossy(&body[..body.len().min(200)])))));
+            return Err(TakeError::Failed(format!(
+                "job-take: HTTP {status}: {}",
+                crate::py::py_str_repr(&String::from_utf8_lossy(&body[..body.len().min(200)]))
+            )));
         }
         if body.iter().all(|b| b.is_ascii_whitespace()) {
             return Ok(Vec::new());
         }
-        let v: Value = serde_json::from_slice(&body).map_err(|e| TakeError::Failed(format!("job-take: not JSON: {e}")))?;
+        let v: Value = serde_json::from_slice(&body)
+            .map_err(|e| TakeError::Failed(format!("job-take: not JSON: {e}")))?;
         let items = match v {
             Value::Array(a) => a,
             other => vec![other],
@@ -223,7 +272,10 @@ impl RunpodClient {
                 jobs.push(j);
             } else {
                 let s = dumps(&j, None, false);
-                (self.log)(&format!("worker: job-take returned a job without id / input: {}", s.chars().take(200).collect::<String>()));
+                (self.log)(&format!(
+                    "worker: job-take returned a job without id / input: {}",
+                    s.chars().take(200).collect::<String>()
+                ));
             }
         }
         Ok(jobs)
@@ -235,10 +287,17 @@ impl RunpodClient {
         for attempt in 0..self.done_attempts {
             let err = match self.request("POST", &url, Some(body), Some(job_id), None) {
                 Ok((status, _)) if (200..300).contains(&status) => return true,
-                Ok((status, text)) => format!("HTTP {status}: {}", crate::py::py_str_repr(&String::from_utf8_lossy(&text[..text.len().min(200)]))),
+                Ok((status, text)) => format!(
+                    "HTTP {status}: {}",
+                    crate::py::py_str_repr(&String::from_utf8_lossy(&text[..text.len().min(200)]))
+                ),
                 Err(e) => e,
             };
-            (self.log)(&format!("worker: job {job_id}: posting the result failed (attempt {}/{}): {err}", attempt + 1, self.done_attempts));
+            (self.log)(&format!(
+                "worker: job {job_id}: posting the result failed (attempt {}/{}): {err}",
+                attempt + 1,
+                self.done_attempts
+            ));
             if attempt + 1 < self.done_attempts {
                 (self.sleep)(self.done_backoff_s[attempt.min(self.done_backoff_s.len() - 1)]);
             }
@@ -247,8 +306,16 @@ impl RunpodClient {
     }
 
     pub fn ping(&self) {
-        let Some(url) = self.env.ping_url(self.current_job().as_deref()) else { return };
-        match self.request("GET", &url, None, None, Some(self.env.ping_interval_s * 2.0)) {
+        let Some(url) = self.env.ping_url(self.current_job().as_deref()) else {
+            return;
+        };
+        match self.request(
+            "GET",
+            &url,
+            None,
+            None,
+            Some(self.env.ping_interval_s * 2.0),
+        ) {
             Ok((status, _)) if (200..300).contains(&status) => {}
             Ok((status, _)) => (self.log)(&format!("worker: ping: HTTP {status}")),
             Err(e) => (self.log)(&format!("worker: ping failed: {e}")),
@@ -264,30 +331,49 @@ impl RunpodClient {
         if tx.is_none() {
             let (s, r) = mpsc::channel::<(String, Value)>();
             let me = Arc::clone(self);
-            std::thread::Builder::new().name("rp-progress".into()).spawn(move || me.send_progress(r)).expect("progress thread");
+            std::thread::Builder::new()
+                .name("rp-progress".into())
+                .spawn(move || me.send_progress(r))
+                .expect("progress thread");
             *tx = Some(s);
         }
         {
             let (count, _) = &*self.pending;
             *count.lock().unwrap() += 1;
         }
-        let _ = tx.as_ref().unwrap().send((job_id.to_string(), data.clone()));
+        let _ = tx
+            .as_ref()
+            .unwrap()
+            .send((job_id.to_string(), data.clone()));
     }
 
     fn send_progress(&self, rx: mpsc::Receiver<(String, Value)>) {
         while let Ok((job_id, data)) = rx.recv() {
             let body = json!({"status": "IN_PROGRESS", "output": data});
-            match self.request("POST", &self.env.done_url(&job_id), Some(&body), Some(&job_id), None) {
+            match self.request(
+                "POST",
+                &self.env.done_url(&job_id),
+                Some(&body),
+                Some(&job_id),
+                None,
+            ) {
                 Ok((status, _)) if (200..300).contains(&status) => {
                     self.progress_sent.fetch_add(1, Ordering::SeqCst);
                 }
                 Ok((status, text)) => {
                     self.progress_failed.fetch_add(1, Ordering::SeqCst);
-                    (self.log)(&format!("worker: job {job_id}: progress update: HTTP {status}: {}", crate::py::py_str_repr(&String::from_utf8_lossy(&text[..text.len().min(200)]))));
+                    (self.log)(&format!(
+                        "worker: job {job_id}: progress update: HTTP {status}: {}",
+                        crate::py::py_str_repr(&String::from_utf8_lossy(
+                            &text[..text.len().min(200)]
+                        ))
+                    ));
                 }
                 Err(e) => {
                     self.progress_failed.fetch_add(1, Ordering::SeqCst);
-                    (self.log)(&format!("worker: job {job_id}: progress update failed: {e}"));
+                    (self.log)(&format!(
+                        "worker: job {job_id}: progress update failed: {e}"
+                    ));
                 }
             }
             let (count, cv) = &*self.pending;
@@ -332,13 +418,21 @@ pub fn run_job(handler: Handler, job: &Value, env: Option<&RunpodEnv>) -> Value 
             } else {
                 result.insert("output".into(), out);
             }
-            if result.get("output").map(|o| o.as_object().map(|m| m.is_empty()).unwrap_or(false)).unwrap_or(false) {
+            if result
+                .get("output")
+                .map(|o| o.as_object().map(|m| m.is_empty()).unwrap_or(false))
+                .unwrap_or(false)
+            {
                 result.shift_remove("output");
             }
             Value::Object(result)
         }
         Err(p) => {
-            let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
+            let msg = p
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "panic".into());
             let bt = std::backtrace::Backtrace::force_capture();
             let report = json!({
                 "error_type": "<class 'panic'>",
@@ -379,7 +473,10 @@ pub fn install_signal_handlers(stop: Arc<AtomicBool>, log: Log) {
         .spawn(move || loop {
             let s = SIGNAL_SEEN.swap(0, Ordering::SeqCst);
             if s != 0 {
-                log(&format!("worker: {} received: stopping after the current job", if s == SIGTERM { "SIGTERM" } else { "SIGINT" }));
+                log(&format!(
+                    "worker: {} received: stopping after the current job",
+                    if s == SIGTERM { "SIGTERM" } else { "SIGINT" }
+                ));
                 stop.store(true, Ordering::SeqCst);
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -389,7 +486,13 @@ pub fn install_signal_handlers(stop: Arc<AtomicBool>, log: Log) {
 
 /// The worker loop: take, run, post, until `stop` is set (or `max_jobs`
 /// ran). Returns the number of jobs run.
-pub fn serve(handler: Handler, client: &Arc<RunpodClient>, stop: Arc<AtomicBool>, max_jobs: Option<usize>, idle_s: f64) -> usize {
+pub fn serve(
+    handler: Handler,
+    client: &Arc<RunpodClient>,
+    stop: Arc<AtomicBool>,
+    max_jobs: Option<usize>,
+    idle_s: f64,
+) -> usize {
     let log = client.log.clone();
     let env = client.env.clone();
     if env.ping.is_some() {
@@ -408,7 +511,10 @@ pub fn serve(handler: Handler, client: &Arc<RunpodClient>, stop: Arc<AtomicBool>
             })
             .expect("ping thread");
     }
-    log(&format!("worker: {VERSION} as {}: waiting for jobs", env.worker_id));
+    log(&format!(
+        "worker: {VERSION} as {}: waiting for jobs",
+        env.worker_id
+    ));
     let mut done = 0;
     let mut backoff = 1.0f64;
     while !stop.load(Ordering::SeqCst) {
@@ -423,7 +529,9 @@ pub fn serve(handler: Handler, client: &Arc<RunpodClient>, stop: Arc<AtomicBool>
                 continue;
             }
             Err(TakeError::Failed(e)) => {
-                log(&format!("worker: job-take failed: {e}; retrying in {backoff:.0} s"));
+                log(&format!(
+                    "worker: job-take failed: {e}; retrying in {backoff:.0} s"
+                ));
                 (client.sleep)(backoff);
                 backoff = (backoff * 2.0).min(30.0);
                 continue;
@@ -447,9 +555,17 @@ pub fn serve(handler: Handler, client: &Arc<RunpodClient>, stop: Arc<AtomicBool>
             done += 1;
             log(&format!(
                 "worker: job {job_id} {} in {:.1} s ({})",
-                if result.get("error").is_some() { "failed" } else { "done" },
+                if result.get("error").is_some() {
+                    "failed"
+                } else {
+                    "done"
+                },
                 t0.elapsed().as_secs_f64(),
-                if sent { "result sent" } else { "result NOT accepted: the platform will time the job out" }
+                if sent {
+                    "result sent"
+                } else {
+                    "result NOT accepted: the platform will time the job out"
+                }
             ));
             if max_jobs.map(|m| done >= m).unwrap_or(false) {
                 stop.store(true, Ordering::SeqCst);
@@ -465,13 +581,21 @@ pub fn serve(handler: Handler, client: &Arc<RunpodClient>, stop: Arc<AtomicBool>
 /// (a file holding `{"input": …}` or the input itself; the SDK's
 /// `test_input.json` in the working directory when none is given), the
 /// result printed as JSON to `out`. Exit code 1 when it failed, 2 without a file.
-pub fn run_local(handler: Handler, test_input: Option<&str>, log: &Log, out: &mut dyn std::io::Write) -> i32 {
+pub fn run_local(
+    handler: Handler,
+    test_input: Option<&str>,
+    log: &Log,
+    out: &mut dyn std::io::Write,
+) -> i32 {
     let path = test_input.unwrap_or("test_input.json");
     if !std::path::Path::new(path).is_file() {
         log(&format!("worker: local mode: {path} not found (RUNPOD_WEBHOOK_GET_JOB is unset; pass --test-input FILE)"));
         return 2;
     }
-    let doc: Value = match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string())) {
+    let doc: Value = match std::fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
+    {
         Ok(d) => d,
         Err(e) => {
             log(&format!("worker: local mode: {path}: {e}"));
@@ -482,11 +606,18 @@ pub fn run_local(handler: Handler, test_input: Option<&str>, log: &Log, out: &mu
     if let Some(id) = doc.get("id") {
         job["id"] = Value::String(crate::py::py_str(id));
     }
-    log(&format!("worker: local mode: running {path} as job {}", crate::py::py_str(&job["id"])));
+    log(&format!(
+        "worker: local mode: running {path} as job {}",
+        crate::py::py_str(&job["id"])
+    ));
     let result = run_job(handler, &job, None);
     let _ = writeln!(out, "{}", dumps(&result, Some(1), false));
     let _ = out.flush();
-    if result.get("error").is_some() { 1 } else { 0 }
+    if result.get("error").is_some() {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -494,16 +625,29 @@ mod tests {
     use super::*;
 
     fn env(map: &[(&str, &str)]) -> Result<Option<RunpodEnv>, String> {
-        RunpodEnv::from_env(&map.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect())
+        RunpodEnv::from_env(
+            &map.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        )
     }
 
     #[test]
     fn url_templates() {
         let base = "http://127.0.0.1:1/v2/ep1";
         let e = env(&[
-            ("RUNPOD_WEBHOOK_GET_JOB", &format!("{base}/job-take/$ID?gpu=NVIDIA+H200")),
-            ("RUNPOD_WEBHOOK_POST_OUTPUT", &format!("{base}/job-done/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200")),
-            ("RUNPOD_WEBHOOK_PING", &format!("{base}/ping/$RUNPOD_POD_ID")),
+            (
+                "RUNPOD_WEBHOOK_GET_JOB",
+                &format!("{base}/job-take/$ID?gpu=NVIDIA+H200"),
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_OUTPUT",
+                &format!("{base}/job-done/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200"),
+            ),
+            (
+                "RUNPOD_WEBHOOK_PING",
+                &format!("{base}/ping/$RUNPOD_POD_ID"),
+            ),
             ("RUNPOD_PING_INTERVAL", "100"),
             ("RUNPOD_AI_API_KEY", "secret-key"),
             ("RUNPOD_POD_ID", "w42"),
@@ -511,20 +655,71 @@ mod tests {
         ])
         .unwrap()
         .unwrap();
-        assert_eq!(e.take_url(false), format!("{base}/job-take/w42?gpu=NVIDIA+H200&job_in_progress=0"));
-        assert_eq!(e.take_url(true), format!("{base}/job-take/w42?gpu=NVIDIA+H200&job_in_progress=1"));
-        assert_eq!(e.done_url("j1"), format!("{base}/job-done/w42/j1?gpu=NVIDIA+H200&isStream=false"));
-        assert_eq!(e.ping_url(Some("a/b")), Some(format!("{base}/ping/w42?job_id=a%2Fb&runpod_version={}", VERSION.replace('/', "%2F"))));
-        assert_eq!(e.ping_url(None), Some(format!("{base}/ping/w42?runpod_version={}", VERSION.replace('/', "%2F"))));
-        assert_eq!((e.ping_interval_s, e.api_key.as_str(), e.hostname.as_deref()), (0.1, "secret-key", Some("host-1")));
+        assert_eq!(
+            e.take_url(false),
+            format!("{base}/job-take/w42?gpu=NVIDIA+H200&job_in_progress=0")
+        );
+        assert_eq!(
+            e.take_url(true),
+            format!("{base}/job-take/w42?gpu=NVIDIA+H200&job_in_progress=1")
+        );
+        assert_eq!(
+            e.done_url("j1"),
+            format!("{base}/job-done/w42/j1?gpu=NVIDIA+H200&isStream=false")
+        );
+        assert_eq!(
+            e.ping_url(Some("a/b")),
+            Some(format!(
+                "{base}/ping/w42?job_id=a%2Fb&runpod_version={}",
+                VERSION.replace('/', "%2F")
+            ))
+        );
+        assert_eq!(
+            e.ping_url(None),
+            Some(format!(
+                "{base}/ping/w42?runpod_version={}",
+                VERSION.replace('/', "%2F")
+            ))
+        );
+        assert_eq!(
+            (e.ping_interval_s, e.api_key.as_str(), e.hostname.as_deref()),
+            (0.1, "secret-key", Some("host-1"))
+        );
     }
 
     #[test]
     fn env_without_query_and_defaults() {
-        let e = env(&[("RUNPOD_WEBHOOK_GET_JOB", "https://api.runpod.ai/v2/ep/job-take/$ID"), ("RUNPOD_WEBHOOK_POST_OUTPUT", "https://api.runpod.ai/v2/ep/job-done/$RUNPOD_POD_ID/$ID")]).unwrap().unwrap();
-        assert_eq!(e.take_url(false), format!("https://api.runpod.ai/v2/ep/job-take/{}?job_in_progress=0", e.worker_id));
-        assert!(e.worker_id.starts_with("local-") && e.ping.is_none() && e.ping_url(Some("x")).is_none());
-        assert_eq!(e.done_url("j"), format!("https://api.runpod.ai/v2/ep/job-done/{}/j?isStream=false", e.worker_id));
+        let e = env(&[
+            (
+                "RUNPOD_WEBHOOK_GET_JOB",
+                "https://api.runpod.ai/v2/ep/job-take/$ID",
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_OUTPUT",
+                "https://api.runpod.ai/v2/ep/job-done/$RUNPOD_POD_ID/$ID",
+            ),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            e.take_url(false),
+            format!(
+                "https://api.runpod.ai/v2/ep/job-take/{}?job_in_progress=0",
+                e.worker_id
+            )
+        );
+        assert!(
+            e.worker_id.starts_with("local-")
+                && e.ping.is_none()
+                && e.ping_url(Some("x")).is_none()
+        );
+        assert_eq!(
+            e.done_url("j"),
+            format!(
+                "https://api.runpod.ai/v2/ep/job-done/{}/j?isStream=false",
+                e.worker_id
+            )
+        );
         assert_eq!((e.ping_interval_s, e.api_key.as_str()), (10.0, ""));
     }
 
@@ -532,33 +727,73 @@ mod tests {
     fn local_mode_when_get_job_is_unset() {
         assert_eq!(env(&[]).unwrap(), None);
         assert_eq!(env(&[("RUNPOD_WEBHOOK_GET_JOB", "  ")]).unwrap(), None);
-        assert!(env(&[("RUNPOD_WEBHOOK_GET_JOB", "https://x/job-take/$ID")]).unwrap_err().contains("RUNPOD_WEBHOOK_POST_OUTPUT"));
+        assert!(env(&[("RUNPOD_WEBHOOK_GET_JOB", "https://x/job-take/$ID")])
+            .unwrap_err()
+            .contains("RUNPOD_WEBHOOK_POST_OUTPUT"));
     }
 
     #[test]
     fn run_job_shapes() {
-        let e = env(&[("RUNPOD_WEBHOOK_GET_JOB", "u/$ID"), ("RUNPOD_WEBHOOK_POST_OUTPUT", "u/$ID")]).unwrap().unwrap();
+        let e = env(&[
+            ("RUNPOD_WEBHOOK_GET_JOB", "u/$ID"),
+            ("RUNPOD_WEBHOOK_POST_OUTPUT", "u/$ID"),
+        ])
+        .unwrap()
+        .unwrap();
         let job = json!({"id": "j", "input": {}});
         let out = json!({"error": "x", "where": "validate", "refresh_worker": true});
-        assert_eq!(run_job(&|_| out.clone(), &job, Some(&e)), json!({"output": {"where": "validate"}, "error": "x", "stopPod": true}));
+        assert_eq!(
+            run_job(&|_| out.clone(), &job, Some(&e)),
+            json!({"output": {"where": "validate"}, "error": "x", "stopPod": true})
+        );
         assert_eq!(run_job(&|_| json!({}), &job, Some(&e)), json!({}));
-        assert_eq!(run_job(&|_| json!({"error": ""}), &job, Some(&e)), json!({}));
-        assert_eq!(run_job(&|_| json!([1, 2]), &job, Some(&e)), json!({"output": [1, 2]}));
-        assert_eq!(run_job(&|_| json!(true), &job, Some(&e)), json!({"output": true}));
+        assert_eq!(
+            run_job(&|_| json!({"error": ""}), &job, Some(&e)),
+            json!({})
+        );
+        assert_eq!(
+            run_job(&|_| json!([1, 2]), &job, Some(&e)),
+            json!({"output": [1, 2]})
+        );
+        assert_eq!(
+            run_job(&|_| json!(true), &job, Some(&e)),
+            json!({"output": true})
+        );
     }
 
     #[test]
     fn a_panicking_handler_is_the_sdk_report() {
-        let e = env(&[("RUNPOD_WEBHOOK_GET_JOB", "u/$ID"), ("RUNPOD_WEBHOOK_POST_OUTPUT", "u/$ID"), ("RUNPOD_POD_ID", "w42"), ("RUNPOD_POD_HOSTNAME", "host-1")]).unwrap().unwrap();
+        let e = env(&[
+            ("RUNPOD_WEBHOOK_GET_JOB", "u/$ID"),
+            ("RUNPOD_WEBHOOK_POST_OUTPUT", "u/$ID"),
+            ("RUNPOD_POD_ID", "w42"),
+            ("RUNPOD_POD_HOSTNAME", "host-1"),
+        ])
+        .unwrap()
+        .unwrap();
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let r = run_job(&|_| panic!("engine died"), &json!({"id": "boom-1", "input": {}}), Some(&e));
+        let r = run_job(
+            &|_| panic!("engine died"),
+            &json!({"id": "boom-1", "input": {}}),
+            Some(&e),
+        );
         std::panic::set_hook(prev);
         assert_eq!(r.as_object().unwrap().keys().collect::<Vec<_>>(), ["error"]);
         let report: Value = serde_json::from_str(r["error"].as_str().unwrap()).unwrap();
         assert_eq!(report["error_message"], "engine died");
-        assert!(report["error_traceback"].as_str().unwrap().contains("Traceback"));
-        assert_eq!((report["worker_id"].as_str(), report["hostname"].as_str(), report["runpod_version"].as_str()), (Some("w42"), Some("host-1"), Some(VERSION)));
+        assert!(report["error_traceback"]
+            .as_str()
+            .unwrap()
+            .contains("Traceback"));
+        assert_eq!(
+            (
+                report["worker_id"].as_str(),
+                report["hostname"].as_str(),
+                report["runpod_version"].as_str()
+            ),
+            (Some("w42"), Some("host-1"), Some(VERSION))
+        );
     }
 
     #[test]
@@ -573,14 +808,42 @@ mod tests {
         };
         let log = crate::null_log();
         let mut out = Vec::new();
-        assert_eq!(run_local(&handler, Some(f.to_str().unwrap()), &log, &mut out), 0);
-        assert_eq!(*seen.lock().unwrap(), vec![json!({"id": "local_test", "input": {"engine": "h3", "prompt": "a fox"}})]);
-        assert_eq!(String::from_utf8(out).unwrap(), "{\n \"output\": {\n  \"frames\": 124\n }\n}\n");
+        assert_eq!(
+            run_local(&handler, Some(f.to_str().unwrap()), &log, &mut out),
+            0
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![json!({"id": "local_test", "input": {"engine": "h3", "prompt": "a fox"}})]
+        );
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "{\n \"output\": {\n  \"frames\": 124\n }\n}\n"
+        );
         std::fs::write(&f, r#"{"id": "j7", "input": {"op": "x"}}"#).unwrap();
         let mut out = Vec::new();
-        assert_eq!(run_local(&|_| json!({"error": "unknown op", "where": "validate"}), Some(f.to_str().unwrap()), &log, &mut out), 1);
-        assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), json!({"output": {"where": "validate"}, "error": "unknown op"}));
-        assert_eq!(run_local(&handler, Some(dir.join("missing.json").to_str().unwrap()), &log, &mut Vec::new()), 2);
+        assert_eq!(
+            run_local(
+                &|_| json!({"error": "unknown op", "where": "validate"}),
+                Some(f.to_str().unwrap()),
+                &log,
+                &mut out
+            ),
+            1
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&out).unwrap(),
+            json!({"output": {"where": "validate"}, "error": "unknown op"})
+        );
+        assert_eq!(
+            run_local(
+                &handler,
+                Some(dir.join("missing.json").to_str().unwrap()),
+                &log,
+                &mut Vec::new()
+            ),
+            2
+        );
     }
 
     #[test]
@@ -588,13 +851,19 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let logs = Arc::new(Mutex::new(Vec::new()));
         let l = logs.clone();
-        install_signal_handlers(stop.clone(), Arc::new(move |s: &str| l.lock().unwrap().push(s.to_string())));
+        install_signal_handlers(
+            stop.clone(),
+            Arc::new(move |s: &str| l.lock().unwrap().push(s.to_string())),
+        );
         on_signal(SIGTERM); // what the kernel would call
         let t0 = std::time::Instant::now();
         while !stop.load(Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(2) {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(stop.load(Ordering::SeqCst));
-        assert_eq!(*logs.lock().unwrap(), vec!["worker: SIGTERM received: stopping after the current job".to_string()]);
+        assert_eq!(
+            *logs.lock().unwrap(),
+            vec!["worker: SIGTERM received: stopping after the current job".to_string()]
+        );
     }
 }

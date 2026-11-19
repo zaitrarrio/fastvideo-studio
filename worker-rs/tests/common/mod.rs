@@ -11,7 +11,10 @@ use std::thread::JoinHandle;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 pub fn catalog() -> fvstudio::catalog::Catalog {
-    fvstudio::catalog::Catalog::load(Some(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../catalog/catalog.json"))).unwrap()
+    fvstudio::catalog::Catalog::load(Some(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../catalog/catalog.json"),
+    ))
+    .unwrap()
 }
 
 /// A served fake: the port and a stop handle.
@@ -31,7 +34,11 @@ impl Fake {
                 handle(req);
             }
         });
-        Fake { port, server, thread: Some(thread) }
+        Fake {
+            port,
+            server,
+            thread: Some(thread),
+        }
     }
 
     pub fn base(&self) -> String {
@@ -59,7 +66,15 @@ pub fn body_of(req: &mut Request) -> Vec<u8> {
 }
 
 pub fn headers_of(req: &Request) -> HashMap<String, String> {
-    req.headers().iter().map(|h| (h.field.as_str().to_string().to_lowercase(), h.value.as_str().to_string())).collect()
+    req.headers()
+        .iter()
+        .map(|h| {
+            (
+                h.field.as_str().to_string().to_lowercase(),
+                h.value.as_str().to_string(),
+            )
+        })
+        .collect()
 }
 
 pub fn split_url(url: &str) -> (String, HashMap<String, Vec<String>>) {
@@ -95,13 +110,23 @@ pub fn unquote(s: &str) -> String {
 
 pub fn respond_json(req: Request, code: u16, body: &Value) {
     let data = serde_json::to_vec(body).unwrap();
-    let _ = req.respond(Response::from_data(data).with_status_code(code).with_header(Header::from_bytes("Content-Type", "application/json").unwrap()));
+    let _ = req.respond(
+        Response::from_data(data)
+            .with_status_code(code)
+            .with_header(Header::from_bytes("Content-Type", "application/json").unwrap()),
+    );
 }
 
 pub fn respond_bytes(req: Request, code: u16, body: Vec<u8>, ctype: &str) {
     // Always a Content-Length (tiny_http chunks bodies over 32 KiB by default; R2 does not).
-    let r = Response::from_data(body).with_status_code(code).with_chunked_threshold(usize::MAX);
-    let r = if ctype.is_empty() { r } else { r.with_header(Header::from_bytes("Content-Type", ctype).unwrap()) };
+    let r = Response::from_data(body)
+        .with_status_code(code)
+        .with_chunked_threshold(usize::MAX);
+    let r = if ctype.is_empty() {
+        r
+    } else {
+        r.with_header(Header::from_bytes("Content-Type", ctype).unwrap())
+    };
     let _ = req.respond(r);
 }
 
@@ -116,9 +141,22 @@ pub fn respond_bytes(req: Request, code: u16, body: Vec<u8>, ctype: &str) {
 pub struct RunpodState {
     pub jobs: Vec<Value>,
     pub taken: Vec<String>,
-    pub takes: Vec<(String, HashMap<String, Vec<String>>, HashMap<String, String>)>,
-    pub posts: Vec<(String, HashMap<String, Vec<String>>, HashMap<String, String>, Value)>,
-    pub pings: Vec<(String, HashMap<String, Vec<String>>, HashMap<String, String>)>,
+    pub takes: Vec<(
+        String,
+        HashMap<String, Vec<String>>,
+        HashMap<String, String>,
+    )>,
+    pub posts: Vec<(
+        String,
+        HashMap<String, Vec<String>>,
+        HashMap<String, String>,
+        Value,
+    )>,
+    pub pings: Vec<(
+        String,
+        HashMap<String, Vec<String>>,
+        HashMap<String, String>,
+    )>,
     pub take_statuses: Vec<u16>,
     pub fail_done: usize,
 }
@@ -147,7 +185,11 @@ impl FakeRunpod {
                     }
                     if !s.jobs.is_empty() {
                         let job = s.jobs.remove(0);
-                        s.taken.push(job.get("id").map(fvstudio::py::py_str).unwrap_or_else(|| "<list>".into()));
+                        s.taken.push(
+                            job.get("id")
+                                .map(fvstudio::py::py_str)
+                                .unwrap_or_else(|| "<list>".into()),
+                        );
                         drop(s);
                         respond_json(req, 200, &job);
                         return;
@@ -160,9 +202,13 @@ impl FakeRunpod {
                     respond_json(req, 200, &json!({"status": "ok"}));
                 }
                 Method::Post => {
-                    let body: Value = serde_json::from_slice(&body_of(&mut req)).unwrap_or(Value::Null);
+                    let body: Value =
+                        serde_json::from_slice(&body_of(&mut req)).unwrap_or(Value::Null);
                     let mut s = st.lock().unwrap();
-                    let progress = body.get("status").map(|v| v == "IN_PROGRESS").unwrap_or(false);
+                    let progress = body
+                        .get("status")
+                        .map(|v| v == "IN_PROGRESS")
+                        .unwrap_or(false);
                     s.posts.push((path, q, h, body));
                     if !progress && s.fail_done > 0 {
                         s.fail_done -= 1;
@@ -182,9 +228,18 @@ impl FakeRunpod {
     pub fn env(&self) -> fvstudio::rp::RunpodEnv {
         let base = format!("{}/v2/ep1", self.fake.base());
         let m: fvstudio::EnvMap = [
-            ("RUNPOD_WEBHOOK_GET_JOB", format!("{base}/job-take/$ID?gpu=NVIDIA+H200")),
-            ("RUNPOD_WEBHOOK_POST_OUTPUT", format!("{base}/job-done/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200")),
-            ("RUNPOD_WEBHOOK_POST_STREAM", format!("{base}/job-stream/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200")),
+            (
+                "RUNPOD_WEBHOOK_GET_JOB",
+                format!("{base}/job-take/$ID?gpu=NVIDIA+H200"),
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_OUTPUT",
+                format!("{base}/job-done/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200"),
+            ),
+            (
+                "RUNPOD_WEBHOOK_POST_STREAM",
+                format!("{base}/job-stream/$RUNPOD_POD_ID/$ID?gpu=NVIDIA+H200"),
+            ),
             ("RUNPOD_WEBHOOK_PING", format!("{base}/ping/$RUNPOD_POD_ID")),
             ("RUNPOD_PING_INTERVAL", "100".into()),
             ("RUNPOD_AI_API_KEY", "secret-key".into()),
@@ -197,12 +252,48 @@ impl FakeRunpod {
         fvstudio::rp::RunpodEnv::from_env(&m).unwrap().unwrap()
     }
 
-    pub fn done_posts(&self) -> Vec<(String, HashMap<String, Vec<String>>, HashMap<String, String>, Value)> {
-        self.state.lock().unwrap().posts.iter().filter(|p| p.3.get("status").map(|v| v != "IN_PROGRESS").unwrap_or(true)).cloned().collect()
+    pub fn done_posts(
+        &self,
+    ) -> Vec<(
+        String,
+        HashMap<String, Vec<String>>,
+        HashMap<String, String>,
+        Value,
+    )> {
+        self.state
+            .lock()
+            .unwrap()
+            .posts
+            .iter()
+            .filter(|p| {
+                p.3.get("status")
+                    .map(|v| v != "IN_PROGRESS")
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect()
     }
 
-    pub fn progress_posts(&self) -> Vec<(String, HashMap<String, Vec<String>>, HashMap<String, String>, Value)> {
-        self.state.lock().unwrap().posts.iter().filter(|p| p.3.get("status").map(|v| v == "IN_PROGRESS").unwrap_or(false)).cloned().collect()
+    pub fn progress_posts(
+        &self,
+    ) -> Vec<(
+        String,
+        HashMap<String, Vec<String>>,
+        HashMap<String, String>,
+        Value,
+    )> {
+        self.state
+            .lock()
+            .unwrap()
+            .posts
+            .iter()
+            .filter(|p| {
+                p.3.get("status")
+                    .map(|v| v == "IN_PROGRESS")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect()
     }
 }
 
@@ -240,19 +331,44 @@ impl FakeS3 {
                 let body = body_of(&mut req);
                 let mut s = st.lock().unwrap();
                 s.log.push(("PUT".into(), url.clone(), h.clone()));
-                s.objects.insert((bucket, key), (body.clone(), h.get("content-type").cloned()));
+                s.objects.insert(
+                    (bucket, key),
+                    (body.clone(), h.get("content-type").cloned()),
+                );
                 drop(s);
                 let etag = format!("\"{}\"", fvstudio::r2::sha256_hex(&body));
-                let _ = req.respond(Response::from_data(Vec::new()).with_status_code(200).with_header(Header::from_bytes("ETag", etag).unwrap()));
+                let _ = req.respond(
+                    Response::from_data(Vec::new())
+                        .with_status_code(200)
+                        .with_header(Header::from_bytes("ETag", etag).unwrap()),
+                );
                 return;
             }
-            if method == "GET" && key.is_empty() && q.get("list-type").map(|v| v == &["2".to_string()]).unwrap_or(false) {
+            if method == "GET"
+                && key.is_empty()
+                && q.get("list-type")
+                    .map(|v| v == &["2".to_string()])
+                    .unwrap_or(false)
+            {
                 let mut s = st.lock().unwrap();
                 s.log.push(("GET".into(), url.clone(), h.clone()));
-                let prefix = q.get("prefix").and_then(|v| v.first()).cloned().unwrap_or_default();
-                let mut keys: Vec<String> = s.objects.keys().filter(|(b, k)| *b == bucket && k.starts_with(&prefix)).map(|(_, k)| k.clone()).collect();
+                let prefix = q
+                    .get("prefix")
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .unwrap_or_default();
+                let mut keys: Vec<String> = s
+                    .objects
+                    .keys()
+                    .filter(|(b, k)| *b == bucket && k.starts_with(&prefix))
+                    .map(|(_, k)| k.clone())
+                    .collect();
                 keys.sort();
-                let start: usize = q.get("continuation-token").and_then(|v| v.first()).and_then(|v| v.parse().ok()).unwrap_or(0);
+                let start: usize = q
+                    .get("continuation-token")
+                    .and_then(|v| v.first())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
                 let end = (start + page).min(keys.len());
                 let truncated = start + page < keys.len();
                 let mut xml = vec![
@@ -262,7 +378,10 @@ impl FakeS3 {
                     format!("<IsTruncated>{}</IsTruncated>", if truncated { "true" } else { "false" }),
                 ];
                 if truncated {
-                    xml.push(format!("<NextContinuationToken>{}</NextContinuationToken>", start + page));
+                    xml.push(format!(
+                        "<NextContinuationToken>{}</NextContinuationToken>",
+                        start + page
+                    ));
                 }
                 for k in &keys[start..end] {
                     xml.push(format!("<Contents><Key>{k}</Key><Size>{}</Size><StorageClass>STANDARD</StorageClass></Contents>", s.objects[&(bucket.clone(), k.clone())].0.len()));
@@ -274,7 +393,11 @@ impl FakeS3 {
             }
             let head = method == "HEAD";
             let mut s = st.lock().unwrap();
-            s.log.push((if head { "HEAD".into() } else { "GET".into() }, url.clone(), h.clone()));
+            s.log.push((
+                if head { "HEAD".into() } else { "GET".into() },
+                url.clone(),
+                h.clone(),
+            ));
             if s.fail_next > 0 {
                 s.fail_next -= 1;
                 drop(s);
@@ -302,7 +425,14 @@ impl FakeS3 {
 
 // ---- fv-serve -------------------------------------------------------------------------
 
-pub fn make_mp4(path: &std::path::Path, width: u32, height: u32, frames: u32, fps: u32, audio: bool) -> bool {
+pub fn make_mp4(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+    frames: u32,
+    fps: u32,
+    audio: bool,
+) -> bool {
     let Some(ff) = fvstudio::py::which("ffmpeg") else {
         // No ffmpeg: a stub with the ftyp box and 1 KiB of padding.
         let mut v = b"\x00\x00\x00\x18ftypmp42".to_vec();
@@ -312,11 +442,36 @@ pub fn make_mp4(path: &std::path::Path, width: u32, height: u32, frames: u32, fp
     };
     let d = format!("{:.3}", frames as f64 / fps as f64);
     let mut cmd = std::process::Command::new(ff);
-    cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", &format!("color=c=blue:s={width}x{height}:r={fps}:d={d}")]);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        &format!("color=c=blue:s={width}x{height}:r={fps}:d={d}"),
+    ]);
     if audio {
-        cmd.args(["-f", "lavfi", "-i", &format!("sine=f=440:d={d}"), "-c:a", "aac"]);
+        cmd.args([
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("sine=f=440:d={d}"),
+            "-c:a",
+            "aac",
+        ]);
     }
-    cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-frames:v", &frames.to_string(), "-shortest"]).arg(path);
+    cmd.args([
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-frames:v",
+        &frames.to_string(),
+        "-shortest",
+    ])
+    .arg(path);
     assert!(cmd.status().unwrap().success());
     true
 }
@@ -338,13 +493,43 @@ pub struct FakeFvServe {
 }
 
 const FV_ALLOWED: &[&str] = &[
-    "model", "prompt", "negative_prompt", "seed", "size", "width", "height", "aspect_ratio", "short_edge", "seconds", "num_frames", "fps", "steps", "guidance", "image_url",
-    "last_image_url", "reference_urls", "reference_strength", "reference_lora_strength", "audio_url", "video_url", "start_s", "end_s", "retake_mode", "extend_s", "extend_at", "context_s",
+    "model",
+    "prompt",
+    "negative_prompt",
+    "seed",
+    "size",
+    "width",
+    "height",
+    "aspect_ratio",
+    "short_edge",
+    "seconds",
+    "num_frames",
+    "fps",
+    "steps",
+    "guidance",
+    "image_url",
+    "last_image_url",
+    "reference_urls",
+    "reference_strength",
+    "reference_lora_strength",
+    "audio_url",
+    "video_url",
+    "start_s",
+    "end_s",
+    "retake_mode",
+    "extend_s",
+    "extend_at",
+    "context_s",
     "prompt_expansion",
 ];
 
 impl FakeFvServe {
-    pub fn start(files_dir: std::path::PathBuf, steps: u32, step_s: f64, fail_model: Option<&str>) -> FakeFvServe {
+    pub fn start(
+        files_dir: std::path::PathBuf,
+        steps: u32,
+        step_s: f64,
+        fail_model: Option<&str>,
+    ) -> FakeFvServe {
         let state = Arc::new(Mutex::new(FvState::default()));
         let st = state.clone();
         let fd = files_dir.clone();
@@ -356,13 +541,21 @@ impl FakeFvServe {
             let port = pc.load(std::sync::atomic::Ordering::SeqCst);
             match (req.method().clone(), path.as_str()) {
                 (Method::Get, "/ping") => respond_json(req, 200, &json!({"status": "healthy"})),
-                (Method::Get, "/fv/v1/capabilities") => respond_json(req, 200, &json!({"auth": {"mode": "none"}, "protocols": ["native"], "models": []})),
+                (Method::Get, "/fv/v1/capabilities") => respond_json(
+                    req,
+                    200,
+                    &json!({"auth": {"mode": "none"}, "protocols": ["native"], "models": []}),
+                ),
                 (Method::Get, p) if p.starts_with("/fv/v1/jobs/") => {
                     let jid = p.rsplit('/').next().unwrap().to_string();
                     let mut s = st.lock().unwrap();
                     let Some(mut j) = s.jobs.get(&jid).cloned() else {
                         drop(s);
-                        respond_json(req, 404, &json!({"error": {"kind": "not_found", "message": "no such job"}}));
+                        respond_json(
+                            req,
+                            404,
+                            &json!({"error": {"kind": "not_found", "message": "no such job"}}),
+                        );
                         return;
                     };
                     advance(&mut j, steps, step_s, fail_model.as_deref(), &fd, port);
@@ -378,24 +571,48 @@ impl FakeFvServe {
                     }
                 }
                 (Method::Post, "/fv/v1/jobs") => {
-                    let body: Value = serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
+                    let body: Value =
+                        serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
                     let mut s = st.lock().unwrap();
                     s.requests.push(body.clone());
-                    let mut unknown: Vec<&String> = body.as_object().map(|o| o.keys().filter(|k| !FV_ALLOWED.contains(&k.as_str())).collect()).unwrap_or_default();
+                    let mut unknown: Vec<&String> = body
+                        .as_object()
+                        .map(|o| {
+                            o.keys()
+                                .filter(|k| !FV_ALLOWED.contains(&k.as_str()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     unknown.sort();
                     if let Some(u) = unknown.first() {
                         drop(s);
-                        respond_json(req, 400, &json!({"error": {"kind": "invalid_request", "message": format!("unknown field `{u}`"), "param": u}}));
+                        respond_json(
+                            req,
+                            400,
+                            &json!({"error": {"kind": "invalid_request", "message": format!("unknown field `{u}`"), "param": u}}),
+                        );
                         return;
                     }
                     let truthy = |k: &str| body.get(k).map(fvstudio::py::truthy).unwrap_or(false);
                     if !truthy("prompt") && !truthy("video_url") && !truthy("audio_url") {
                         drop(s);
-                        respond_json(req, 400, &json!({"error": {"kind": "invalid_request", "message": "`prompt` must not be empty", "param": "prompt"}}));
+                        respond_json(
+                            req,
+                            400,
+                            &json!({"error": {"kind": "invalid_request", "message": "`prompt` must not be empty", "param": "prompt"}}),
+                        );
                         return;
                     }
-                    let jid = format!("fvjob_{:x}{}", fvstudio::now_s().to_bits(), s.requests.len());
-                    let size = body.get("size").and_then(|v| v.as_str()).unwrap_or("832x480").to_string();
+                    let jid = format!(
+                        "fvjob_{:x}{}",
+                        fvstudio::now_s().to_bits(),
+                        s.requests.len()
+                    );
+                    let size = body
+                        .get("size")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("832x480")
+                        .to_string();
                     let (w, h) = size.split_once('x').unwrap();
                     let j = json!({"id": jid, "model": body["model"], "created": fvstudio::now_s(), "state": "queued", "progress": 0.0,
                                    "width": w.parse::<i64>().unwrap(), "height": h.parse::<i64>().unwrap(),
@@ -409,7 +626,11 @@ impl FakeFvServe {
             }
         });
         port_cell.store(fake.port, std::sync::atomic::Ordering::SeqCst); // the output URL carries this server's port
-        FakeFvServe { fake, state, files_dir }
+        FakeFvServe {
+            fake,
+            state,
+            files_dir,
+        }
     }
 
     pub fn requests(&self) -> Vec<Value> {
@@ -417,7 +638,14 @@ impl FakeFvServe {
     }
 }
 
-fn advance(j: &mut Value, steps: u32, step_s: f64, fail_model: Option<&str>, files_dir: &std::path::Path, port: u16) {
+fn advance(
+    j: &mut Value,
+    steps: u32,
+    step_s: f64,
+    fail_model: Option<&str>,
+    files_dir: &std::path::Path,
+    port: u16,
+) {
     let t = fvstudio::now_s() - j["created"].as_f64().unwrap();
     let state = j["state"].as_str().unwrap().to_string();
     if state == "succeeded" || state == "failed" {
@@ -440,7 +668,14 @@ fn advance(j: &mut Value, steps: u32, step_s: f64, fail_model: Option<&str>, fil
         let out = files_dir.join(format!("{}.mp4", j["id"].as_str().unwrap()));
         if !out.exists() {
             std::fs::create_dir_all(files_dir).unwrap();
-            make_mp4(&out, j["width"].as_u64().unwrap() as u32, j["height"].as_u64().unwrap() as u32, j["num_frames"].as_u64().unwrap().min(9) as u32, j["fps"].as_u64().unwrap() as u32, true);
+            make_mp4(
+                &out,
+                j["width"].as_u64().unwrap() as u32,
+                j["height"].as_u64().unwrap() as u32,
+                j["num_frames"].as_u64().unwrap().min(9) as u32,
+                j["fps"].as_u64().unwrap() as u32,
+                true,
+            );
         }
         j["output"] = json!({"url": format!("http://127.0.0.1:{port}/files/{}?sig=x", out.file_name().unwrap().to_string_lossy()), "mime": "video/mp4", "bytes": out.metadata().unwrap().len(),
                              "width": j["width"], "height": j["height"], "frames": j["num_frames"], "fps": j["fps"], "audio": {"rate": 48000, "channels": 2}});
@@ -477,7 +712,13 @@ pub struct FakeLlama {
 
 impl FakeLlama {
     pub fn start(answer: &str, loading: bool, fail_status: Option<u16>, hang_s: f64) -> FakeLlama {
-        let state = Arc::new(Mutex::new(LlamaState { answer: answer.into(), loading, fail_status, hang_s, ..Default::default() }));
+        let state = Arc::new(Mutex::new(LlamaState {
+            answer: answer.into(),
+            loading,
+            fail_status,
+            hang_s,
+            ..Default::default()
+        }));
         let st = state.clone();
         let fake = Fake::start(move |mut req: Request| {
             let (path, _) = split_url(req.url());
@@ -488,13 +729,18 @@ impl FakeLlama {
                     let loading = s.loading;
                     drop(s);
                     if loading {
-                        respond_json(req, 503, &json!({"error": {"code": 503, "message": "Loading model", "type": "unavailable_error"}}));
+                        respond_json(
+                            req,
+                            503,
+                            &json!({"error": {"code": 503, "message": "Loading model", "type": "unavailable_error"}}),
+                        );
                     } else {
                         respond_json(req, 200, &json!({"status": "ok"}));
                     }
                 }
                 (Method::Post, "/v1/chat/completions") => {
-                    let body: Value = serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
+                    let body: Value =
+                        serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
                     let mut s = st.lock().unwrap();
                     s.requests.push(body.clone());
                     let (hang, fail, mut answer) = (s.hang_s, s.fail_status, s.answer.clone());
@@ -503,14 +749,22 @@ impl FakeLlama {
                         std::thread::sleep(std::time::Duration::from_secs_f64(hang));
                     }
                     if let Some(code) = fail {
-                        respond_json(req, code, &json!({"error": {"code": code, "message": "boom"}}));
+                        respond_json(
+                            req,
+                            code,
+                            &json!({"error": {"code": code, "message": "boom"}}),
+                        );
                         return;
                     }
                     if body.get("max_tokens") == Some(&json!(1)) {
                         answer = "ok".into(); // the readiness probe's 1-token completion
                     }
-                    respond_json(req, 200, &json!({"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": body.get("model").cloned().unwrap_or(json!("fake")),
-                        "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}));
+                    respond_json(
+                        req,
+                        200,
+                        &json!({"id": "chatcmpl-fake", "object": "chat.completion", "created": 0, "model": body.get("model").cloned().unwrap_or(json!("fake")),
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}),
+                    );
                 }
                 _ => respond_json(req, 404, &json!({"error": "not found"})),
             }
@@ -527,10 +781,24 @@ impl FakeLlama {
     }
 
     pub fn system_of(&self) -> String {
-        self.last()["messages"].as_array().unwrap().iter().find(|m| m["role"] == "system").unwrap()["content"].as_str().unwrap().to_string()
+        self.last()["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "system")
+            .unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
     }
 
     pub fn user_of(&self) -> Value {
-        self.last()["messages"].as_array().unwrap().iter().find(|m| m["role"] == "user").unwrap()["content"].clone()
+        self.last()["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "user")
+            .unwrap()["content"]
+            .clone()
     }
 }

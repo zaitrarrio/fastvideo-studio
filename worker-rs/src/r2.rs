@@ -28,7 +28,12 @@ pub struct R2Config {
 
 impl R2Config {
     pub fn from_env(e: &EnvMap) -> Option<R2Config> {
-        let get = |a: &str, b: &str| e.get(a).filter(|v| !v.is_empty()).or_else(|| e.get(b).filter(|v| !v.is_empty())).cloned();
+        let get = |a: &str, b: &str| {
+            e.get(a)
+                .filter(|v| !v.is_empty())
+                .or_else(|| e.get(b).filter(|v| !v.is_empty()))
+                .cloned()
+        };
         Some(R2Config {
             endpoint: get("STUDIO_R2_ENDPOINT", "FV_R2_ENDPOINT")?,
             access_key_id: get("STUDIO_R2_ACCESS_KEY_ID", "FV_R2_ACCESS_KEY_ID")?,
@@ -39,7 +44,13 @@ impl R2Config {
 }
 
 pub trait ObjectStore: Send + Sync {
-    fn put_file(&self, bucket: &str, key: &str, path: &Path, content_type: Option<&str>) -> anyhow::Result<()>;
+    fn put_file(
+        &self,
+        bucket: &str,
+        key: &str,
+        path: &Path,
+        content_type: Option<&str>,
+    ) -> anyhow::Result<()>;
     fn get_file(&self, bucket: &str, key: &str, path: &Path) -> anyhow::Result<u64>;
     fn get_bytes(&self, bucket: &str, key: &str) -> anyhow::Result<Vec<u8>>;
     fn list_keys(&self, bucket: &str, prefix: &str) -> anyhow::Result<Vec<(String, u64)>>;
@@ -75,7 +86,12 @@ pub fn urlsplit(url: &str) -> (String, String, String, String) {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, ""),
     };
-    (scheme.to_string(), netloc.to_string(), path.to_string(), query.to_string())
+    (
+        scheme.to_string(),
+        netloc.to_string(),
+        path.to_string(),
+        query.to_string(),
+    )
 }
 
 /// `Host` as SigV4 signs it: lowercase, no userinfo, no default port
@@ -85,7 +101,9 @@ pub fn host_header(url: &str) -> String {
     let hostport = netloc.rsplit('@').next().unwrap_or("");
     let (host, port) = if let Some(end) = hostport.strip_prefix('[').and_then(|h| h.find(']')) {
         let h = &hostport[1..1 + end];
-        let p = hostport[1 + end..].strip_prefix(':').and_then(|p| p.parse::<u16>().ok());
+        let p = hostport[1 + end..]
+            .strip_prefix(':')
+            .and_then(|p| p.parse::<u16>().ok());
         (format!("[{}]", h.to_lowercase()), p)
     } else {
         match hostport.rsplit_once(':') {
@@ -129,11 +147,26 @@ pub struct SigV4 {
 
 impl SigV4 {
     pub fn new(access_key_id: &str, secret_access_key: &str) -> SigV4 {
-        SigV4 { access_key_id: access_key_id.into(), secret_access_key: secret_access_key.into(), region: "auto".into(), service: "s3".into() }
+        SigV4 {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            region: "auto".into(),
+            service: "s3".into(),
+        }
     }
 
-    pub fn with_scope(access_key_id: &str, secret_access_key: &str, region: &str, service: &str) -> SigV4 {
-        SigV4 { access_key_id: access_key_id.into(), secret_access_key: secret_access_key.into(), region: region.into(), service: service.into() }
+    pub fn with_scope(
+        access_key_id: &str,
+        secret_access_key: &str,
+        region: &str,
+        service: &str,
+    ) -> SigV4 {
+        SigV4 {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            region: region.into(),
+            service: service.into(),
+        }
     }
 
     pub fn scope(&self, date: &str) -> String {
@@ -141,7 +174,10 @@ impl SigV4 {
     }
 
     pub fn signing_key(&self, date: &str) -> Vec<u8> {
-        let mut k = hmac_sha256(format!("AWS4{}", self.secret_access_key).as_bytes(), date.as_bytes());
+        let mut k = hmac_sha256(
+            format!("AWS4{}", self.secret_access_key).as_bytes(),
+            date.as_bytes(),
+        );
         for part in [self.region.as_str(), self.service.as_str(), "aws4_request"] {
             k = hmac_sha256(&k, part.as_bytes());
         }
@@ -153,48 +189,116 @@ impl SigV4 {
         if q.is_empty() {
             return String::new();
         }
-        let mut pairs: Vec<(String, String)> = q.split('&').map(|p| p.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())).unwrap_or((p.to_string(), String::new()))).collect();
+        let mut pairs: Vec<(String, String)> = q
+            .split('&')
+            .map(|p| {
+                p.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .unwrap_or((p.to_string(), String::new()))
+            })
+            .collect();
         pairs.sort();
-        pairs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&")
+        pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&")
     }
 
     /// (signed header names, signature) of the canonical request built from
     /// `headers` (every one of them is signed).
-    fn signature(&self, method: &str, url: &str, headers: &[(String, String)], payload_hash: &str, amz_date: &str) -> (String, String) {
-        let mut canon: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_lowercase(), v.split_whitespace().collect::<Vec<_>>().join(" "))).collect();
+    fn signature(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        payload_hash: &str,
+        amz_date: &str,
+    ) -> (String, String) {
+        let mut canon: Vec<(String, String)> = headers
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_lowercase(),
+                    v.split_whitespace().collect::<Vec<_>>().join(" "),
+                )
+            })
+            .collect();
         canon.sort();
-        let signed = canon.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(";");
+        let signed = canon
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect::<Vec<_>>()
+            .join(";");
         let (_, _, path, _) = urlsplit(url);
         let canonical_request = [
             method.to_uppercase(),
-            if path.is_empty() { "/".to_string() } else { path },
+            if path.is_empty() {
+                "/".to_string()
+            } else {
+                path
+            },
             Self::canonical_query(url),
-            canon.iter().map(|(k, v)| format!("{k}:{v}\n")).collect::<String>(),
+            canon
+                .iter()
+                .map(|(k, v)| format!("{k}:{v}\n"))
+                .collect::<String>(),
             signed.clone(),
             payload_hash.to_string(),
         ]
         .join("\n");
         let date = &amz_date[..8];
-        let string_to_sign = ["AWS4-HMAC-SHA256".to_string(), amz_date.to_string(), self.scope(date), sha256_hex(canonical_request.as_bytes())].join("\n");
-        let sig = hex::encode(hmac_sha256(&self.signing_key(date), string_to_sign.as_bytes()));
+        let string_to_sign = [
+            "AWS4-HMAC-SHA256".to_string(),
+            amz_date.to_string(),
+            self.scope(date),
+            sha256_hex(canonical_request.as_bytes()),
+        ]
+        .join("\n");
+        let sig = hex::encode(hmac_sha256(
+            &self.signing_key(date),
+            string_to_sign.as_bytes(),
+        ));
         (signed, sig)
     }
 
     /// The request headers with `Host`, `X-Amz-Date`, `X-Amz-Content-SHA256`
     /// and `Authorization` added; every header in the result but
     /// `Authorization` is signed. `now`: Unix seconds (None: the clock).
-    pub fn sign_headers(&self, method: &str, url: &str, headers: &[(String, String)], payload_hash: &str, now: Option<i64>) -> Vec<(String, String)> {
+    pub fn sign_headers(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        payload_hash: &str,
+        now: Option<i64>,
+    ) -> Vec<(String, String)> {
         let amz = amz_date(now.unwrap_or_else(|| crate::now_s() as i64));
         let mut h: Vec<(String, String)> = headers
             .iter()
-            .filter(|(k, _)| !["authorization", "x-amz-date", "x-amz-content-sha256", "host"].contains(&k.to_lowercase().as_str()))
+            .filter(|(k, _)| {
+                ![
+                    "authorization",
+                    "x-amz-date",
+                    "x-amz-content-sha256",
+                    "host",
+                ]
+                .contains(&k.to_lowercase().as_str())
+            })
             .cloned()
             .collect();
         h.push(("Host".into(), host_header(url)));
         h.push(("X-Amz-Date".into(), amz.clone()));
         h.push(("X-Amz-Content-SHA256".into(), payload_hash.into()));
         let (signed, sig) = self.signature(method, url, &h, payload_hash, &amz);
-        h.push(("Authorization".into(), format!("AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={signed}, Signature={sig}", self.access_key_id, self.scope(&amz[..8]))));
+        h.push((
+            "Authorization".into(),
+            format!(
+                "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={signed}, Signature={sig}",
+                self.access_key_id,
+                self.scope(&amz[..8])
+            ),
+        ));
         h
     }
 
@@ -204,16 +308,35 @@ impl SigV4 {
         let amz = amz_date(now.unwrap_or_else(|| crate::now_s() as i64));
         let auth = [
             ("X-Amz-Algorithm", "AWS4-HMAC-SHA256".to_string()),
-            ("X-Amz-Credential", format!("{}/{}", self.access_key_id, self.scope(&amz[..8]))),
+            (
+                "X-Amz-Credential",
+                format!("{}/{}", self.access_key_id, self.scope(&amz[..8])),
+            ),
             ("X-Amz-Date", amz.clone()),
             ("X-Amz-Expires", expires_s.to_string()),
             ("X-Amz-SignedHeaders", "host".to_string()),
         ];
         let (scheme, netloc, path, q) = urlsplit(url);
-        let mut query = if q.is_empty() { String::new() } else { format!("{q}&") };
-        query.push_str(&auth.iter().map(|(k, v)| format!("{}={}", uri_encode(k), uri_encode(v))).collect::<Vec<_>>().join("&"));
+        let mut query = if q.is_empty() {
+            String::new()
+        } else {
+            format!("{q}&")
+        };
+        query.push_str(
+            &auth
+                .iter()
+                .map(|(k, v)| format!("{}={}", uri_encode(k), uri_encode(v)))
+                .collect::<Vec<_>>()
+                .join("&"),
+        );
         let unsigned = format!("{scheme}://{netloc}{path}?{query}");
-        let (_, sig) = self.signature(method, &unsigned, &[("host".to_string(), host_header(url))], UNSIGNED_PAYLOAD, &amz);
+        let (_, sig) = self.signature(
+            method,
+            &unsigned,
+            &[("host".to_string(), host_header(url))],
+            UNSIGNED_PAYLOAD,
+            &amz,
+        );
         format!("{unsigned}&X-Amz-Signature={sig}")
     }
 }
@@ -236,7 +359,10 @@ pub struct R2Store {
 
 impl R2Store {
     pub fn new(cfg: R2Config) -> R2Store {
-        Self::with_sleep(cfg, Box::new(|s| std::thread::sleep(Duration::from_secs_f64(s))))
+        Self::with_sleep(
+            cfg,
+            Box::new(|s| std::thread::sleep(Duration::from_secs_f64(s))),
+        )
     }
 
     pub fn with_sleep(cfg: R2Config, sleep: Box<dyn Fn(f64) + Send + Sync>) -> R2Store {
@@ -249,7 +375,11 @@ impl R2Store {
             backoff_s: 0.5,
             timeout_s,
             sleep,
-            agent: ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(30)).timeout_read(Duration::from_secs_f64(timeout_s)).timeout_write(Duration::from_secs_f64(timeout_s)).build(),
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(30))
+                .timeout_read(Duration::from_secs_f64(timeout_s))
+                .timeout_write(Duration::from_secs_f64(timeout_s))
+                .build(),
         }
     }
 
@@ -263,16 +393,35 @@ impl R2Store {
         }
         if !query.is_empty() {
             u.push('?');
-            u.push_str(&query.iter().map(|(k, v)| format!("{}={}", uri_encode(k), uri_encode(v))).collect::<Vec<_>>().join("&"));
+            u.push_str(
+                &query
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", uri_encode(k), uri_encode(v)))
+                    .collect::<Vec<_>>()
+                    .join("&"),
+            );
         }
         u
     }
 
     /// One signed request; the response (2xx) or an error (`R2Error` for a
     /// non-2xx status, the transport's text otherwise).
-    fn open(&self, method: &str, url: &str, headers: &[(String, String)], body: Option<Box<dyn Read + Send>>, payload_hash: &str, extra: &[(String, String)]) -> anyhow::Result<ureq::Response> {
+    fn open(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(String, String)],
+        body: Option<Box<dyn Read + Send>>,
+        payload_hash: &str,
+        extra: &[(String, String)],
+    ) -> anyhow::Result<ureq::Response> {
         let mut req = self.agent.request(method, url);
-        for (k, v) in self.signer.sign_headers(method, url, headers, payload_hash, None).iter().chain(extra.iter()) {
+        for (k, v) in self
+            .signer
+            .sign_headers(method, url, headers, payload_hash, None)
+            .iter()
+            .chain(extra.iter())
+        {
             req = req.set(k, v); // `extra` is unsigned (Content-Length)
         }
         let r = match body {
@@ -289,7 +438,12 @@ impl R2Store {
                 } else {
                     String::new()
                 };
-                Err(R2Error { status, body: text, url: url.to_string() }.into())
+                Err(R2Error {
+                    status,
+                    body: text,
+                    url: url.to_string(),
+                }
+                .into())
             }
             Err(ureq::Error::Transport(t)) => Err(anyhow::anyhow!("{t}")),
         }
@@ -318,15 +472,33 @@ impl R2Store {
 }
 
 impl ObjectStore for R2Store {
-    fn put_file(&self, bucket: &str, key: &str, path: &Path, content_type: Option<&str>) -> anyhow::Result<()> {
+    fn put_file(
+        &self,
+        bucket: &str,
+        key: &str,
+        path: &Path,
+        content_type: Option<&str>,
+    ) -> anyhow::Result<()> {
         let size = std::fs::metadata(path)?.len();
         let url = self.url(bucket, key, &[]);
-        let headers = vec![("Content-Type".to_string(), content_type.map(str::to_string).unwrap_or_else(|| guess_type(path)))];
+        let headers = vec![(
+            "Content-Type".to_string(),
+            content_type
+                .map(str::to_string)
+                .unwrap_or_else(|| guess_type(path)),
+        )];
         let extra = vec![("Content-Length".to_string(), size.to_string())];
         let path = path.to_path_buf();
         self.retry(&|| {
             let f = std::fs::File::open(&path)?;
-            let r = self.open("PUT", &url, &headers, Some(Box::new(f)), UNSIGNED_PAYLOAD, &extra)?;
+            let r = self.open(
+                "PUT",
+                &url,
+                &headers,
+                Some(Box::new(f)),
+                UNSIGNED_PAYLOAD,
+                &extra,
+            )?;
             let _ = r.into_reader().take(1 << 20).read_to_end(&mut Vec::new());
             Ok(())
         })
@@ -378,7 +550,8 @@ impl ObjectStore for R2Store {
                 Ok(v)
             })?;
             let text = String::from_utf8_lossy(&body).into_owned();
-            let doc = roxmltree::Document::parse(&text).map_err(|e| anyhow::anyhow!("ListObjectsV2: {e}"))?;
+            let doc = roxmltree::Document::parse(&text)
+                .map_err(|e| anyhow::anyhow!("ListObjectsV2: {e}"))?;
             let mut truncated = false;
             token = None;
             for el in doc.root_element().children().filter(|n| n.is_element()) {
@@ -389,14 +562,23 @@ impl ObjectStore for R2Store {
                         for c in el.children().filter(|n| n.is_element()) {
                             match c.tag_name().name() {
                                 "Key" => key = c.text().unwrap_or("").to_string(),
-                                "Size" => size = c.text().unwrap_or("0").trim().parse().unwrap_or(0),
+                                "Size" => {
+                                    size = c.text().unwrap_or("0").trim().parse().unwrap_or(0)
+                                }
                                 _ => {}
                             }
                         }
                         out.push((key, size));
                     }
-                    "IsTruncated" => truncated = el.text().unwrap_or("").trim().eq_ignore_ascii_case("true"),
-                    "NextContinuationToken" => token = el.text().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+                    "IsTruncated" => {
+                        truncated = el.text().unwrap_or("").trim().eq_ignore_ascii_case("true")
+                    }
+                    "NextContinuationToken" => {
+                        token = el
+                            .text()
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                    }
                     _ => {}
                 }
             }
@@ -408,17 +590,22 @@ impl ObjectStore for R2Store {
 
     fn head_size(&self, bucket: &str, key: &str) -> anyhow::Result<Option<u64>> {
         let url = self.url(bucket, key, &[]);
-        self.retry(&|| match self.open("HEAD", &url, &[], None, EMPTY_SHA256, &[]) {
-            Ok(r) => Ok(r.header("Content-Length").and_then(|v| v.trim().parse::<u64>().ok())),
-            Err(e) => match e.downcast_ref::<R2Error>() {
-                Some(r) if r.status == 404 || r.status == 403 => Ok(None),
-                _ => Err(e),
+        self.retry(
+            &|| match self.open("HEAD", &url, &[], None, EMPTY_SHA256, &[]) {
+                Ok(r) => Ok(r
+                    .header("Content-Length")
+                    .and_then(|v| v.trim().parse::<u64>().ok())),
+                Err(e) => match e.downcast_ref::<R2Error>() {
+                    Some(r) if r.status == 404 || r.status == 403 => Ok(None),
+                    _ => Err(e),
+                },
             },
-        })
+        )
     }
 
     fn presign_get(&self, bucket: &str, key: &str, expires_s: u64) -> String {
-        self.signer.presign("GET", &self.url(bucket, key, &[]), expires_s, None)
+        self.signer
+            .presign("GET", &self.url(bucket, key, &[]), expires_s, None)
     }
 }
 
@@ -452,7 +639,13 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 impl ObjectStore for LocalStore {
-    fn put_file(&self, bucket: &str, key: &str, path: &Path, _content_type: Option<&str>) -> anyhow::Result<()> {
+    fn put_file(
+        &self,
+        bucket: &str,
+        key: &str,
+        path: &Path,
+        _content_type: Option<&str>,
+    ) -> anyhow::Result<()> {
         let dst = self.p(bucket, key);
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
@@ -487,7 +680,11 @@ impl ObjectStore for LocalStore {
         files.sort();
         let mut out = Vec::new();
         for p in files {
-            let key = p.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/");
+            let key = p
+                .strip_prefix(&base)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             if key.starts_with(prefix) {
                 out.push((key, p.metadata()?.len()));
             }
@@ -497,18 +694,28 @@ impl ObjectStore for LocalStore {
 
     fn head_size(&self, bucket: &str, key: &str) -> anyhow::Result<Option<u64>> {
         let p = self.p(bucket, key);
-        Ok(if p.is_file() { Some(p.metadata()?.len()) } else { None })
+        Ok(if p.is_file() {
+            Some(p.metadata()?.len())
+        } else {
+            None
+        })
     }
 
     fn presign_get(&self, bucket: &str, key: &str, expires_s: u64) -> String {
         let exp = crate::now_s() as i64 + expires_s as i64;
         let sig = &sha256_hex(format!("{bucket}/{key}/{exp}").as_bytes())[..16];
-        format!("file://{}?X-Expires={exp}&X-Sig={sig}", self.p(bucket, key).display())
+        format!(
+            "file://{}?X-Expires={exp}&X-Sig={sig}",
+            self.p(bucket, key).display()
+        )
     }
 }
 
 pub fn part_path(path: &Path) -> PathBuf {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     path.with_file_name(format!("{name}.part"))
 }
 
@@ -532,7 +739,11 @@ pub fn key_url_part(key: &str) -> String {
     quote(key, "/")
 }
 
-pub fn read_json(store: &dyn ObjectStore, bucket: &str, key: &str) -> anyhow::Result<serde_json::Value> {
+pub fn read_json(
+    store: &dyn ObjectStore,
+    bucket: &str,
+    key: &str,
+) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::from_slice(&store.get_bytes(bucket, key)?)?)
 }
 
@@ -546,14 +757,25 @@ mod tests {
     const SK: &str = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
 
     fn store() -> R2Store {
-        R2Store::with_sleep(R2Config { endpoint: ENDPOINT.into(), access_key_id: AK.into(), secret_access_key: SK.into(), bucket: "studio".into() }, Box::new(|_| {}))
+        R2Store::with_sleep(
+            R2Config {
+                endpoint: ENDPOINT.into(),
+                access_key_id: AK.into(),
+                secret_access_key: SK.into(),
+                bucket: "studio".into(),
+            },
+            Box::new(|_| {}),
+        )
     }
 
     #[test]
     fn signing_key_matches_the_aws_example() {
         // docs.aws.amazon.com/general/latest/gr/signature-v4-examples.html
         let sig = SigV4::with_scope(AK, SK, "us-east-1", "iam");
-        assert_eq!(hex::encode(sig.signing_key("20150830")), "c4afb1cc5771d871763a393e44b703571b55cc28424d1a5e86da6ed3c154a4b9");
+        assert_eq!(
+            hex::encode(sig.signing_key("20150830")),
+            "c4afb1cc5771d871763a393e44b703571b55cc28424d1a5e86da6ed3c154a4b9"
+        );
     }
 
     #[test]
@@ -561,8 +783,19 @@ mod tests {
         // Region / service scoped like the AWS suite's `get-vanilla-query` case,
         // at 2015-08-30T12:36:00Z, with the payload hash header S3 signs.
         let sig = SigV4::with_scope(AK, SK, "us-east-1", "service");
-        let h = sig.sign_headers("GET", "https://example.amazonaws.com/?Param2=value2&Param1=value1", &[], EMPTY_SHA256, Some(1_440_938_160));
-        let auth = h.iter().find(|(k, _)| k == "Authorization").unwrap().1.clone();
+        let h = sig.sign_headers(
+            "GET",
+            "https://example.amazonaws.com/?Param2=value2&Param1=value1",
+            &[],
+            EMPTY_SHA256,
+            Some(1_440_938_160),
+        );
+        let auth = h
+            .iter()
+            .find(|(k, _)| k == "Authorization")
+            .unwrap()
+            .1
+            .clone();
         assert_eq!(auth, "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=311c7f58b10b06de8540bb5a27f441ee0609f1d5ad7b191e68d7ea87d90e3d6b");
     }
 
@@ -602,15 +835,35 @@ mod tests {
         for (name, method, bucket, key, query, headers, payload, want_url, want_tail) in cases {
             let url = s.url(bucket, key, &query);
             assert_eq!(url, want_url, "{name}");
-            let hs: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let hs: Vec<(String, String)> = headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
             let ours = s.signer.sign_headers(method, &url, &hs, payload, Some(NOW));
-            let get = |k: &str| ours.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone()).unwrap();
+            let get = |k: &str| {
+                ours.iter()
+                    .find(|(x, _)| x == k)
+                    .map(|(_, v)| v.clone())
+                    .unwrap()
+            };
             assert_eq!(get("X-Amz-Date"), "20261119T123456Z");
             assert_eq!(get("X-Amz-Content-SHA256"), payload);
             assert_eq!(get("Authorization"), format!("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261119/auto/s3/aws4_request, {want_tail}"), "{name}");
             // Nothing we send is unsigned, apart from Authorization itself.
-            let signed: Vec<&str> = want_tail.split("SignedHeaders=").nth(1).unwrap().split(',').next().unwrap().split(';').collect();
-            let mut names: Vec<String> = ours.iter().filter(|(k, _)| k != "Authorization").map(|(k, _)| k.to_lowercase()).collect();
+            let signed: Vec<&str> = want_tail
+                .split("SignedHeaders=")
+                .nth(1)
+                .unwrap()
+                .split(',')
+                .next()
+                .unwrap()
+                .split(';')
+                .collect();
+            let mut names: Vec<String> = ours
+                .iter()
+                .filter(|(k, _)| k != "Authorization")
+                .map(|(k, _)| k.to_lowercase())
+                .collect();
             names.sort();
             assert_eq!(names, signed, "{name}");
         }
@@ -634,9 +887,16 @@ mod tests {
     fn presign_get_is_the_query_form() {
         let s = store();
         let url = s.presign_get("studio", "jobs/x/video.mp4", 3600);
-        assert!(url.starts_with(&format!("{ENDPOINT}/studio/jobs/x/video.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=")));
+        assert!(url.starts_with(&format!(
+            "{ENDPOINT}/studio/jobs/x/video.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential="
+        )));
         assert!(url.contains("&X-Amz-Signature=") && url.contains("X-Amz-Expires=3600"));
-        let fixed = s.signer.presign("GET", &s.url("studio", "jobs/abc-1/video.mp4", &[]), 86400, Some(NOW));
+        let fixed = s.signer.presign(
+            "GET",
+            &s.url("studio", "jobs/abc-1/video.mp4", &[]),
+            86400,
+            Some(NOW),
+        );
         assert!(fixed.contains("X-Amz-Credential=AKIDEXAMPLE%2F20261119%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261119T123456Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature="));
         let sig = fixed.rsplit('=').next().unwrap();
         assert_eq!(sig.len(), 64);
@@ -648,10 +908,19 @@ mod tests {
         assert_eq!(host_header("https://a.example.com:443/x"), "a.example.com");
         assert_eq!(host_header("http://127.0.0.1:8080/x?y"), "127.0.0.1:8080");
         assert_eq!(host_header("http://u:p@h.com/x"), "h.com");
-        assert_eq!(urlsplit("https://h/p/q?a=1&b=2#f"), ("https".into(), "h".into(), "/p/q".into(), "a=1&b=2".into()));
+        assert_eq!(
+            urlsplit("https://h/p/q?a=1&b=2#f"),
+            ("https".into(), "h".into(), "/p/q".into(), "a=1&b=2".into())
+        );
         assert_eq!(SigV4::canonical_query("https://h/?b=2&a=1"), "a=1&b=2");
-        assert_eq!(key_url_part("jobs/j1/ü thumb.jpg"), "jobs/j1/%C3%BC%20thumb.jpg");
-        assert_eq!(part_path(Path::new("/a/video.mp4")), PathBuf::from("/a/video.mp4.part"));
+        assert_eq!(
+            key_url_part("jobs/j1/ü thumb.jpg"),
+            "jobs/j1/%C3%BC%20thumb.jpg"
+        );
+        assert_eq!(
+            part_path(Path::new("/a/video.mp4")),
+            PathBuf::from("/a/video.mp4.part")
+        );
     }
 
     #[test]
@@ -659,13 +928,21 @@ mod tests {
         let dir = crate::tempdir("localstore");
         let st = LocalStore::new(dir.join("r2"));
         std::fs::write(dir.join("a.txt"), b"hello").unwrap();
-        st.put_file("b", "x/y/a.txt", &dir.join("a.txt"), None).unwrap();
-        st.put_file("b", "x/b.txt", &dir.join("a.txt"), None).unwrap();
+        st.put_file("b", "x/y/a.txt", &dir.join("a.txt"), None)
+            .unwrap();
+        st.put_file("b", "x/b.txt", &dir.join("a.txt"), None)
+            .unwrap();
         assert_eq!(st.get_bytes("b", "x/y/a.txt").unwrap(), b"hello");
         assert_eq!(st.head_size("b", "x/b.txt").unwrap(), Some(5));
         assert_eq!(st.head_size("b", "nope").unwrap(), None);
-        assert_eq!(st.list_keys("b", "x/").unwrap(), vec![("x/b.txt".to_string(), 5), ("x/y/a.txt".to_string(), 5)]);
-        assert_eq!(st.get_file("b", "x/b.txt", &dir.join("out/b.txt")).unwrap(), 5);
+        assert_eq!(
+            st.list_keys("b", "x/").unwrap(),
+            vec![("x/b.txt".to_string(), 5), ("x/y/a.txt".to_string(), 5)]
+        );
+        assert_eq!(
+            st.get_file("b", "x/b.txt", &dir.join("out/b.txt")).unwrap(),
+            5
+        );
         assert!(st.get_file("b", "nope", &dir.join("out/n")).is_err());
         let u = st.presign_get("b", "x/b.txt", 60);
         assert!(u.starts_with("file://") && u.contains("?X-Expires=") && u.contains("&X-Sig="));

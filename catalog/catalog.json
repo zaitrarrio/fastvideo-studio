@@ -2005,7 +2005,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-4step-vsa"
+    "variant": "fasth3-4step-vsa",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2083,7 +2084,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "sol-h3"
+    "variant": "sol-h3",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2148,7 +2150,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-4step-vsa-480p-taeh3"
+    "variant": "fasth3-4step-vsa-480p-taeh3",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2225,7 +2228,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "h3-ref2v-turbo"
+    "variant": "h3-ref2v-turbo",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2301,7 +2305,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "h3-ref2v-max"
+    "variant": "h3-ref2v-max",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2376,7 +2381,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-trim-nvfp4"
+    "variant": "fasth3-trim-nvfp4",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2451,7 +2457,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-v2-nvfp4"
+    "variant": "fasth3-v2-nvfp4",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2527,7 +2534,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "h3-lightx2v-turbo"
+    "variant": "h3-lightx2v-turbo",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2611,7 +2619,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-distill-sol"
+    "variant": "ltx25-distill-sol",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25"
@@ -2695,7 +2704,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-distill-dense"
+    "variant": "ltx25-distill-dense",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25"
@@ -2779,7 +2789,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-distill-sol-nvfp4-taehv"
+    "variant": "ltx25-distill-sol-nvfp4-taehv",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25",
@@ -2842,7 +2853,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-ref2v"
+    "variant": "ltx25-ref2v",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25",
@@ -2923,7 +2935,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-a2v-guided"
+    "variant": "ltx25-a2v-guided",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25",
@@ -2993,7 +3006,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "fastwan22-ti2v-5b"
+    "variant": "fastwan22-ti2v-5b",
+    "process": "ti2v-5b"
    },
    "trees": [
     "weights/fastwan22-ti2v-5b"
@@ -3064,7 +3078,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "wan22-ti2v-5b"
+    "variant": "wan22-ti2v-5b",
+    "process": "ti2v-5b"
    },
    "trees": [
     "weights/wan22-ti2v-5b"
@@ -3134,7 +3149,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "fastwan22-ti2v-5b-taehv"
+    "variant": "fastwan22-ti2v-5b-taehv",
+    "process": "ti2v-5b"
    },
    "trees": [
     "weights/fastwan22-ti2v-5b",
@@ -3185,7 +3201,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "wan14b-plug-4step"
+    "variant": "wan14b-plug-4step",
+    "process": "wan14b"
    },
    "trees": [
     "weights/wan21-t2v-14b",
@@ -3238,7 +3255,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "fastwan21-1.3b"
+    "variant": "fastwan21-1.3b",
+    "process": "fastwan21"
    },
    "trees": [
     "weights/fastwan21-1.3b"
@@ -3287,7 +3305,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "sfwan21-1.3b"
+    "variant": "sfwan21-1.3b",
+    "process": "streaming"
    },
    "trees": [
     "weights/sfwan21-1.3b",
@@ -3337,7 +3356,8 @@
     "expand.prompt"
    ],
    "recipe": {
-    "variant": "longlive-1.3b"
+    "variant": "longlive-1.3b",
+    "process": "streaming"
    },
    "trees": [
     "weights/sfwan21-1.3b",

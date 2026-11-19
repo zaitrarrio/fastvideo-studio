@@ -39,7 +39,20 @@ pub struct RunResult {
 
 impl RunResult {
     pub fn new(seed: i64, width: i64, height: i64, frames: i64, fps: i64) -> RunResult {
-        RunResult { seed, width, height, frames, fps, video_y4m: None, audio_wav: None, video_mp4: None, upscaled: None, timings: Timings::default(), command: String::new(), extra: Map::new() }
+        RunResult {
+            seed,
+            width,
+            height,
+            frames,
+            fps,
+            video_y4m: None,
+            audio_wav: None,
+            video_mp4: None,
+            upscaled: None,
+            timings: Timings::default(),
+            command: String::new(),
+            extra: Map::new(),
+        }
     }
 }
 
@@ -64,6 +77,9 @@ pub struct Ctx<'a> {
     pub fv_weights: String,
     /// tests: a fake fv-serve already listens on the port
     pub fv_fake: bool,
+    /// The catalog's models (the fastvideo driver groups its `fv-serve`
+    /// process by `recipe.process`); empty in unit tests.
+    pub models: &'a [crate::catalog::Model],
 }
 
 impl<'a> Ctx<'a> {
@@ -83,7 +99,13 @@ impl<'a> Ctx<'a> {
 /// `random.randrange(1, 2**31)`.
 pub fn random_seed() -> i64 {
     let mut buf = [0u8; 4];
-    let ok = std::fs::File::open("/dev/urandom").and_then(|mut f| std::io::Read::read_exact(&mut f, &mut buf)).is_ok();
-    let v = if ok { u32::from_le_bytes(buf) } else { (crate::now_s() * 1e6) as u32 ^ std::process::id() };
+    let ok = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut buf))
+        .is_ok();
+    let v = if ok {
+        u32::from_le_bytes(buf)
+    } else {
+        (crate::now_s() * 1e6) as u32 ^ std::process::id()
+    };
     1 + (v % (u32::MAX / 2)) as i64
 }

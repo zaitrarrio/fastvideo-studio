@@ -57,12 +57,30 @@ impl Default for Roots {
 impl Roots {
     pub fn from_catalog(trees: &Map<String, Value>, env: &EnvMap) -> Roots {
         let pick = |var: &str, key: &str, default: &str| -> PathBuf {
-            env.get(var).filter(|v| !v.is_empty()).cloned().unwrap_or_else(|| trees.get(key).and_then(|v| v.as_str()).unwrap_or(default).to_string()).into()
+            env.get(var)
+                .filter(|v| !v.is_empty())
+                .cloned()
+                .unwrap_or_else(|| {
+                    trees
+                        .get(key)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(default)
+                        .to_string()
+                })
+                .into()
         };
         Roots {
             volume: pick("STUDIO_VOLUME", "volume", "/runpod-volume"),
-            volume_weights: pick("STUDIO_VOLUME_WEIGHTS", "volume_weights", "/runpod-volume/weights"),
-            volume_extras: pick("STUDIO_VOLUME_EXTRAS", "volume_extras", "/runpod-volume/h3-rs"),
+            volume_weights: pick(
+                "STUDIO_VOLUME_WEIGHTS",
+                "volume_weights",
+                "/runpod-volume/weights",
+            ),
+            volume_extras: pick(
+                "STUDIO_VOLUME_EXTRAS",
+                "volume_extras",
+                "/runpod-volume/h3-rs",
+            ),
             stage_dir: pick("STUDIO_STAGE_DIR", "stage_dir", "/workspace/stage"),
             link_root: pick("STUDIO_LINK_ROOT", "link_root", "/workspace/w"),
         }
@@ -82,13 +100,21 @@ pub struct TreeEntry {
 
 impl TreeEntry {
     pub fn parse(entry: &str) -> Result<TreeEntry, String> {
-        let t = |k: &str, s: &str, n: &str| TreeEntry { kind: k.into(), source: s.into(), name: n.into() };
+        let t = |k: &str, s: &str, n: &str| TreeEntry {
+            kind: k.into(),
+            source: s.into(),
+            name: n.into(),
+        };
         if let Some(rest) = entry.strip_prefix("r2:") {
-            let (src, name) = rest.split_once('=').ok_or_else(|| format!("unknown tree entry {}", crate::py::py_str_repr(entry)))?;
+            let (src, name) = rest
+                .split_once('=')
+                .ok_or_else(|| format!("unknown tree entry {}", crate::py::py_str_repr(entry)))?;
             return Ok(t("r2", src.trim_matches('/'), name.trim_matches('/')));
         }
         if let Some(rest) = entry.strip_prefix("https:") {
-            let (src, name) = rest.split_once('=').ok_or_else(|| format!("unknown tree entry {}", crate::py::py_str_repr(entry)))?;
+            let (src, name) = rest
+                .split_once('=')
+                .ok_or_else(|| format!("unknown tree entry {}", crate::py::py_str_repr(entry)))?;
             return Ok(t("https", src.trim_matches('/'), name.trim_matches('/')));
         }
         if let Some(rest) = entry.strip_prefix("weights/") {
@@ -97,7 +123,10 @@ impl TreeEntry {
         if entry.starts_with("h3-rs/") {
             return Ok(t("volume", entry, entry));
         }
-        Err(format!("unknown tree entry {}", crate::py::py_str_repr(entry)))
+        Err(format!(
+            "unknown tree entry {}",
+            crate::py::py_str_repr(entry)
+        ))
     }
 }
 
@@ -135,7 +164,9 @@ pub struct WeightsResolver {
 }
 
 fn is_symlink(p: &Path) -> bool {
-    std::fs::symlink_metadata(p).map(|m| m.file_type().is_symlink()).unwrap_or(false)
+    std::fs::symlink_metadata(p)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn exists(p: &Path) -> bool {
@@ -148,7 +179,9 @@ fn under(p: &Path, root: &Path) -> bool {
 
 /// `[p for p in s.rglob("*") if p.is_file()]`: symlinked directories are not followed.
 fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
@@ -161,19 +194,38 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 impl WeightsResolver {
-    pub fn new(roots: Roots, store: Option<Arc<dyn ObjectStore>>, log: Log, dry_run: bool) -> WeightsResolver {
-        WeightsResolver { roots, store, weights_bucket: "fv-weights".into(), log, dry_run }
+    pub fn new(
+        roots: Roots,
+        store: Option<Arc<dyn ObjectStore>>,
+        log: Log,
+        dry_run: bool,
+    ) -> WeightsResolver {
+        WeightsResolver {
+            roots,
+            store,
+            weights_bucket: "fv-weights".into(),
+            log,
+            dry_run,
+        }
     }
 
     // ---- status ------------------------------------------------------------
 
     pub fn status(&self, entry: &str) -> Result<TreeStatus, String> {
         let t = TreeEntry::parse(entry)?;
-        let mut st = TreeStatus { entry: entry.into(), name: t.name.clone(), ..Default::default() };
+        let mut st = TreeStatus {
+            entry: entry.into(),
+            name: t.name.clone(),
+            ..Default::default()
+        };
         let vol = self.volume_path(&t);
         st.volume = vol.map(|v| exists(&v)).unwrap_or(false);
         let staged = self.roots.stage_dir.join(&t.name);
-        st.staged = if staged.is_dir() { exists(&staged) && exists(&staged.join(COMPLETE_MARKER)) } else { staged.is_file() };
+        st.staged = if staged.is_dir() {
+            exists(&staged) && exists(&staged.join(COMPLETE_MARKER))
+        } else {
+            staged.is_file()
+        };
         st.fetched = exists(&staged) && t.kind != "volume";
         st.linked = exists(&self.roots.link_root.join(&t.name));
         Ok(st)
@@ -182,7 +234,12 @@ impl WeightsResolver {
     // ---- ensure --------------------------------------------------------------
 
     /// Every tree present and linked, then the stage entries copied.
-    pub fn ensure_model(&self, trees: &[String], stage: &[String], progress: Option<&dyn Fn(&str)>) -> JobResult<EnsureReport> {
+    pub fn ensure_model(
+        &self,
+        trees: &[String],
+        stage: &[String],
+        progress: Option<&dyn Fn(&str)>,
+    ) -> JobResult<EnsureReport> {
         let t0 = now_s();
         let mut fetched = Vec::new();
         let mut staged = Vec::new();
@@ -202,17 +259,22 @@ impl WeightsResolver {
                 staged.push(s.clone());
             }
         }
-        Ok(EnsureReport { stage_s: crate::py::round_to(now_s() - t0, 3), fetched, staged })
+        Ok(EnsureReport {
+            stage_s: crate::py::round_to(now_s() - t0, 3),
+            fetched,
+            staged,
+        })
     }
 
     /// One tree present under the link root; an object-store failure (a
     /// token without read on the weights bucket, a network error) is a
     /// staging failure, not an engine crash.
     pub fn ensure_tree(&self, entry: &str) -> JobResult<bool> {
-        self.ensure_tree_inner(entry).map_err(|e| match e.downcast::<JobError>() {
-            Ok(j) => j,
-            Err(e) => JobError::stage(format!("{entry}: {e:#}")),
-        })
+        self.ensure_tree_inner(entry)
+            .map_err(|e| match e.downcast::<JobError>() {
+                Ok(j) => j,
+                Err(e) => JobError::stage(format!("{entry}: {e:#}")),
+            })
     }
 
     /// Present under the link root. Returns true when it fetched something.
@@ -231,7 +293,11 @@ impl WeightsResolver {
                 self.link(&link, &self.roots.stage_dir.join(&t.name))?;
                 return Ok(fetched);
             }
-            return Err(JobError::stage(format!("{entry}: not on the volume at {}", vol.display())).into());
+            return Err(JobError::stage(format!(
+                "{entry}: not on the volume at {}",
+                vol.display()
+            ))
+            .into());
         }
         let dst = self.roots.stage_dir.join(&t.name);
         if t.kind == "r2" {
@@ -299,7 +365,12 @@ impl WeightsResolver {
                     if realpath(link) == realpath(target) {
                         return Ok(());
                     }
-                    return Err(JobError::stage(format!("cannot link {}: its parent {} is a link into the volume", link.display(), q.display())).into());
+                    return Err(JobError::stage(format!(
+                        "cannot link {}: its parent {} is a link into the volume",
+                        link.display(),
+                        q.display()
+                    ))
+                    .into());
                 }
             }
             p = q.parent();
@@ -315,20 +386,27 @@ impl WeightsResolver {
     /// `TREE[:SUB,SUB]`: copy onto the container disk and repoint the link.
     /// Returns true when it copied.
     pub fn stage(&self, spec: &str) -> JobResult<bool> {
-        self.stage_inner(spec).map_err(|e| match e.downcast::<JobError>() {
-            Ok(j) => j,
-            Err(e) => JobError::stage(format!("stage {spec}: {e:#}")),
-        })
+        self.stage_inner(spec)
+            .map_err(|e| match e.downcast::<JobError>() {
+                Ok(j) => j,
+                Err(e) => JobError::stage(format!("stage {spec}: {e:#}")),
+            })
     }
 
     fn stage_inner(&self, spec: &str) -> anyhow::Result<bool> {
         let (tree, subs_s) = spec.split_once(':').unwrap_or((spec, ""));
-        let mut subs: Vec<String> = subs_s.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+        let mut subs: Vec<String> = subs_s
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
         let src = self.resolve_source_dir(tree);
         let dst = self.roots.stage_dir.join(tree);
         let link = self.roots.link_root.join(tree);
         let Some(src) = src else {
-            return Err(JobError::stage(format!("stage {spec}: {tree} is not on the volume")).into());
+            return Err(
+                JobError::stage(format!("stage {spec}: {tree} is not on the volume")).into(),
+            );
         };
         if realpath(&src) == realpath(&dst) {
             return Ok(false); // already a staged copy (an R2 fetch)
@@ -340,7 +418,11 @@ impl WeightsResolver {
         let t0 = now_s();
         std::fs::create_dir_all(&dst)?;
         if subs.is_empty() {
-            let mut names: Vec<String> = std::fs::read_dir(&src)?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| !n.starts_with("..")).collect();
+            let mut names: Vec<String> = std::fs::read_dir(&src)?
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| !n.starts_with(".."))
+                .collect();
             names.sort();
             subs = names;
         } else {
@@ -362,7 +444,10 @@ impl WeightsResolver {
         for sub in &subs {
             let s = src.join(sub);
             if !exists(&s) {
-                (self.log)(&format!("stage {tree}: no {sub} in {} (skipped)", src.display()));
+                (self.log)(&format!(
+                    "stage {tree}: no {sub} in {} (skipped)",
+                    src.display()
+                ));
                 continue;
             }
             let d = dst.join(sub);
@@ -375,7 +460,10 @@ impl WeightsResolver {
             } else {
                 files_under(&s, &mut files);
             }
-            let pairs: Vec<(PathBuf, PathBuf)> = files.iter().map(|p| (p.clone(), dst.join(p.strip_prefix(&src).unwrap()))).collect();
+            let pairs: Vec<(PathBuf, PathBuf)> = files
+                .iter()
+                .map(|p| (p.clone(), dst.join(p.strip_prefix(&src).unwrap())))
+                .collect();
             for (_, q) in &pairs {
                 if let Some(parent) = q.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -385,17 +473,31 @@ impl WeightsResolver {
             for (p, q) in &pairs {
                 let size = std::fs::metadata(p)?.len();
                 total += size;
-                if !q.is_file() || std::fs::metadata(q).map(|m| m.len()).unwrap_or(u64::MAX) != size {
+                if !q.is_file() || std::fs::metadata(q).map(|m| m.len()).unwrap_or(u64::MAX) != size
+                {
                     bad.push(p.strip_prefix(&src).unwrap().to_string_lossy().into_owned());
                 }
             }
         }
         let dt = (now_s() - t0).max(1e-6);
         if !bad.is_empty() {
-            let first: Vec<String> = bad.iter().take(3).map(|b| crate::py::py_str_repr(b)).collect();
-            return Err(JobError::stage(format!("stage {spec}: {} files wrong after the copy ([{}])", bad.len(), first.join(", "))).into());
+            let first: Vec<String> = bad
+                .iter()
+                .take(3)
+                .map(|b| crate::py::py_str_repr(b))
+                .collect();
+            return Err(JobError::stage(format!(
+                "stage {spec}: {} files wrong after the copy ([{}])",
+                bad.len(),
+                first.join(", ")
+            ))
+            .into());
         }
-        (self.log)(&format!("staged {tree} [{}]: {total} bytes in {dt:.1} s ({:.0} MB/s), {copied} files copied", subs.join(" "), total as f64 / dt / 1e6));
+        (self.log)(&format!(
+            "staged {tree} [{}]: {total} bytes in {dt:.1} s ({:.0} MB/s), {copied} files copied",
+            subs.join(" "),
+            total as f64 / dt / 1e6
+        ));
         std::fs::write(dst.join(COMPLETE_MARKER), b"")?;
         self.link(&link, &dst)?;
         Ok(copied > 0)
@@ -422,8 +524,13 @@ impl WeightsResolver {
 
     /// `cp --update=none`: 8 streams; returns how many were missing before.
     fn copy_parallel(&self, pairs: &[(PathBuf, PathBuf)]) -> anyhow::Result<usize> {
-        let same = |s: &Path, d: &Path| d.is_file() && std::fs::metadata(d).map(|m| m.len()).ok() == std::fs::metadata(s).map(|m| m.len()).ok();
-        let todo: Vec<(PathBuf, PathBuf)> = pairs.iter().filter(|(s, d)| !same(s, d)).cloned().collect();
+        let same = |s: &Path, d: &Path| {
+            d.is_file()
+                && std::fs::metadata(d).map(|m| m.len()).ok()
+                    == std::fs::metadata(s).map(|m| m.len()).ok()
+        };
+        let todo: Vec<(PathBuf, PathBuf)> =
+            pairs.iter().filter(|(s, d)| !same(s, d)).cloned().collect();
         let n = todo.len();
         if n > 0 {
             let queue = Mutex::new(todo.into_iter().collect::<std::collections::VecDeque<_>>());
@@ -431,13 +538,24 @@ impl WeightsResolver {
             std::thread::scope(|scope| {
                 for _ in 0..STAGE_PARALLEL.min(n) {
                     scope.spawn(|| loop {
-                        let Some((s, d)) = queue.lock().unwrap().pop_front() else { break };
-                        let r = std::process::Command::new("cp").arg("--update=none").arg(&s).arg(&d).output();
+                        let Some((s, d)) = queue.lock().unwrap().pop_front() else {
+                            break;
+                        };
+                        let r = std::process::Command::new("cp")
+                            .arg("--update=none")
+                            .arg(&s)
+                            .arg(&d)
+                            .output();
                         if !r.map(|o| o.status.success()).unwrap_or(false) {
                             // BusyBox / old coreutils: plain copy to a temp name then rename.
                             let tmp = crate::r2::part_path(&d);
-                            if let Err(e) = std::fs::copy(&s, &tmp).and_then(|_| std::fs::rename(&tmp, &d)) {
-                                errors.lock().unwrap().push(anyhow::anyhow!("{}: {e}", s.display()));
+                            if let Err(e) =
+                                std::fs::copy(&s, &tmp).and_then(|_| std::fs::rename(&tmp, &d))
+                            {
+                                errors
+                                    .lock()
+                                    .unwrap()
+                                    .push(anyhow::anyhow!("{}: {e}", s.display()));
                             }
                         }
                     });
@@ -459,7 +577,10 @@ impl WeightsResolver {
     /// then only that part is fetched. Add-only, idempotent.
     fn fetch_r2_tree(&self, dest: &str, dst: &Path) -> anyhow::Result<bool> {
         let Some(store) = &self.store else {
-            return Err(JobError::stage(format!("{dest}: not on the volume and no R2 credentials to fetch it")).into());
+            return Err(JobError::stage(format!(
+                "{dest}: not on the volume and no R2 credentials to fetch it"
+            ))
+            .into());
         };
         if dst.is_file() || dst.join(COMPLETE_MARKER).is_file() {
             return Ok(false);
@@ -474,7 +595,10 @@ impl WeightsResolver {
             found = self.find_manifest(store.as_ref(), &tree)?;
         }
         let Some((manifest, rev)) = found else {
-            return Err(JobError::stage(format!("{dest}: not on the volume and no manifest for it in the R2 weights store")).into());
+            return Err(JobError::stage(format!(
+                "{dest}: not on the volume and no manifest for it in the R2 weights store"
+            ))
+            .into());
         };
         let tree_dst: PathBuf = match &only {
             None => dst.to_path_buf(),
@@ -486,30 +610,55 @@ impl WeightsResolver {
         let mut files: Vec<Value> = manifest["files"].as_array().cloned().unwrap_or_default();
         if let Some(o) = &only {
             let pre = format!("{}/", o.trim_end_matches('/'));
-            files.retain(|f| f["path"].as_str().map(|p| p == o || p.starts_with(&pre)).unwrap_or(false));
+            files.retain(|f| {
+                f["path"]
+                    .as_str()
+                    .map(|p| p == o || p.starts_with(&pre))
+                    .unwrap_or(false)
+            });
             if files.is_empty() {
-                return Err(JobError::stage(format!("{dest}: {o} is not in {tree}'s manifest")).into());
+                return Err(
+                    JobError::stage(format!("{dest}: {o} is not in {tree}'s manifest")).into(),
+                );
             }
         }
-        (self.log)(&format!("fetch {tree}@{} from R2: {} files", rev.chars().take(12).collect::<String>(), files.len()));
+        (self.log)(&format!(
+            "fetch {tree}@{} from R2: {} files",
+            rev.chars().take(12).collect::<String>(),
+            files.len()
+        ));
         let prefix = format!("weights/{tree}/{rev}/");
         std::fs::create_dir_all(&tree_dst)?;
         let fetched = Mutex::new(0usize);
-        let queue = Mutex::new(files.iter().cloned().collect::<std::collections::VecDeque<_>>());
+        let queue = Mutex::new(
+            files
+                .iter()
+                .cloned()
+                .collect::<std::collections::VecDeque<_>>(),
+        );
         let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
         std::thread::scope(|scope| {
             for _ in 0..STAGE_PARALLEL.min(files.len().max(1)) {
                 scope.spawn(|| loop {
-                    let Some(f) = queue.lock().unwrap().pop_front() else { break };
+                    let Some(f) = queue.lock().unwrap().pop_front() else {
+                        break;
+                    };
                     let path = f["path"].as_str().unwrap_or("").to_string();
                     let size = f["size"].as_f64().unwrap_or(-1.0) as i64;
                     let p = tree_dst.join(&path);
-                    if p.is_file() && std::fs::metadata(&p).map(|m| m.len() as i64).unwrap_or(-2) == size {
+                    if p.is_file()
+                        && std::fs::metadata(&p).map(|m| m.len() as i64).unwrap_or(-2) == size
+                    {
                         continue;
                     }
                     match store.get_file(&self.weights_bucket, &format!("{prefix}{path}"), &p) {
                         Ok(got) if got as i64 == size => *fetched.lock().unwrap() += 1,
-                        Ok(got) => errors.lock().unwrap().push(JobError::stage(format!("{tree}/{path}: got {got} bytes, manifest says {size}")).into()),
+                        Ok(got) => errors.lock().unwrap().push(
+                            JobError::stage(format!(
+                                "{tree}/{path}: got {got} bytes, manifest says {size}"
+                            ))
+                            .into(),
+                        ),
                         Err(e) => errors.lock().unwrap().push(e),
                     }
                 });
@@ -521,17 +670,45 @@ impl WeightsResolver {
         std::fs::write(tree_dst.join(REVISION_MARKER), format!("{rev}\n"))?;
         if only.is_some() {
             let marker = tree_dst.join(STUDIO_FILES_MARKER);
-            let mut have: BTreeSet<String> = if marker.is_file() { std::fs::read_to_string(&marker)?.split_whitespace().map(str::to_string).collect() } else { BTreeSet::new() };
-            have.extend(files.iter().filter_map(|f| f["path"].as_str().map(str::to_string)));
-            std::fs::write(&marker, format!("{}\n", have.into_iter().collect::<Vec<_>>().join("\n")))?;
+            let mut have: BTreeSet<String> = if marker.is_file() {
+                std::fs::read_to_string(&marker)?
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            };
+            have.extend(
+                files
+                    .iter()
+                    .filter_map(|f| f["path"].as_str().map(str::to_string)),
+            );
+            std::fs::write(
+                &marker,
+                format!("{}\n", have.into_iter().collect::<Vec<_>>().join("\n")),
+            )?;
         } else {
-            std::fs::write(tree_dst.join(COMPLETE_MARKER), format!("{}\n", dumps(&json!({"source": "r2", "dest": tree, "rev": rev}), None, true)))?;
+            std::fs::write(
+                tree_dst.join(COMPLETE_MARKER),
+                format!(
+                    "{}\n",
+                    dumps(
+                        &json!({"source": "r2", "dest": tree, "rev": rev}),
+                        None,
+                        true
+                    )
+                ),
+            )?;
         }
         let n = *fetched.lock().unwrap();
         Ok(n > 0)
     }
 
-    fn find_manifest(&self, store: &dyn ObjectStore, dest: &str) -> anyhow::Result<Option<(Value, String)>> {
+    fn find_manifest(
+        &self,
+        store: &dyn ObjectStore,
+        dest: &str,
+    ) -> anyhow::Result<Option<(Value, String)>> {
         let prefix = format!("manifests/{dest}/");
         let keys: Vec<String> = store
             .list_keys(&self.weights_bucket, &prefix)?
@@ -545,13 +722,31 @@ impl WeightsResolver {
         let mut best: Option<(String, Value)> = None;
         for k in keys {
             let m: Value = serde_json::from_slice(&store.get_bytes(&self.weights_bucket, &k)?)?;
-            let created = |v: &Value| v.get("created_at").map(crate::py::py_str).unwrap_or_default();
-            if best.as_ref().map(|(_, b)| created(&m) > created(b)).unwrap_or(true) {
+            let created = |v: &Value| {
+                v.get("created_at")
+                    .map(crate::py::py_str)
+                    .unwrap_or_default()
+            };
+            if best
+                .as_ref()
+                .map(|(_, b)| created(&m) > created(b))
+                .unwrap_or(true)
+            {
                 best = Some((k, m));
             }
         }
         let (k, m) = best.unwrap();
-        let rev = m.get("rev").filter(|r| crate::py::truthy(r)).map(crate::py::py_str).unwrap_or_else(|| k.rsplit('/').next().unwrap().trim_end_matches(".json").to_string());
+        let rev = m
+            .get("rev")
+            .filter(|r| crate::py::truthy(r))
+            .map(crate::py::py_str)
+            .unwrap_or_else(|| {
+                k.rsplit('/')
+                    .next()
+                    .unwrap()
+                    .trim_end_matches(".json")
+                    .to_string()
+            });
         Ok(Some((m, rev)))
     }
 
@@ -559,7 +754,10 @@ impl WeightsResolver {
     /// against the listing.
     fn fetch_r2_prefix(&self, bucket: &str, prefix: &str, dst: &Path) -> anyhow::Result<bool> {
         let Some(store) = &self.store else {
-            return Err(JobError::stage(format!("r2:{bucket}/{prefix}: no R2 credentials to fetch it")).into());
+            return Err(JobError::stage(format!(
+                "r2:{bucket}/{prefix}: no R2 credentials to fetch it"
+            ))
+            .into());
         };
         if dst.join(COMPLETE_MARKER).is_file() {
             return Ok(false);
@@ -571,20 +769,30 @@ impl WeightsResolver {
         }
         std::fs::create_dir_all(dst)?;
         let fetched = Mutex::new(0usize);
-        let queue = Mutex::new(objs.iter().cloned().collect::<std::collections::VecDeque<_>>());
+        let queue = Mutex::new(
+            objs.iter()
+                .cloned()
+                .collect::<std::collections::VecDeque<_>>(),
+        );
         let errors: Mutex<Vec<anyhow::Error>> = Mutex::new(Vec::new());
         std::thread::scope(|scope| {
             for _ in 0..STAGE_PARALLEL.min(objs.len()) {
                 scope.spawn(|| loop {
-                    let Some((k, n)) = queue.lock().unwrap().pop_front() else { break };
+                    let Some((k, n)) = queue.lock().unwrap().pop_front() else {
+                        break;
+                    };
                     let rel = &k[base.len() + 1..];
                     let p = dst.join(rel);
-                    if p.is_file() && std::fs::metadata(&p).map(|m| m.len()).unwrap_or(u64::MAX) == n {
+                    if p.is_file()
+                        && std::fs::metadata(&p).map(|m| m.len()).unwrap_or(u64::MAX) == n
+                    {
                         continue;
                     }
                     match store.get_file(bucket, &k, &p) {
                         Ok(got) if got == n => *fetched.lock().unwrap() += 1,
-                        Ok(got) => errors.lock().unwrap().push(JobError::stage(format!("{k}: got {got} bytes, listed {n}")).into()),
+                        Ok(got) => errors.lock().unwrap().push(
+                            JobError::stage(format!("{k}: got {got} bytes, listed {n}")).into(),
+                        ),
                         Err(e) => errors.lock().unwrap().push(e),
                     }
                 });
@@ -593,7 +801,17 @@ impl WeightsResolver {
         if let Some(e) = errors.into_inner().unwrap().into_iter().next() {
             return Err(e);
         }
-        std::fs::write(dst.join(COMPLETE_MARKER), format!("{}\n", dumps(&json!({"source": format!("r2:{bucket}/{prefix}")}), None, true)))?;
+        std::fs::write(
+            dst.join(COMPLETE_MARKER),
+            format!(
+                "{}\n",
+                dumps(
+                    &json!({"source": format!("r2:{bucket}/{prefix}")}),
+                    None,
+                    true
+                )
+            ),
+        )?;
         let n = *fetched.lock().unwrap();
         Ok(n > 0)
     }
@@ -608,11 +826,15 @@ impl WeightsResolver {
         }
         let tmp = crate::r2::part_path(dst);
         (self.log)(&format!("fetch {url}"));
-        let (got, _, want) = crate::httpc::download(url, &tmp, 120.0, None).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let (got, _, want) =
+            crate::httpc::download(url, &tmp, 120.0, None).map_err(|e| anyhow::anyhow!("{e}"))?;
         if let Some(want) = want {
             if got != want {
                 let _ = std::fs::remove_file(&tmp);
-                return Err(JobError::stage(format!("{url}: got {got} bytes, Content-Length {want}")).into());
+                return Err(JobError::stage(format!(
+                    "{url}: got {got} bytes, Content-Length {want}"
+                ))
+                .into());
             }
         }
         std::fs::rename(&tmp, dst)?;
@@ -623,11 +845,17 @@ impl WeightsResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tempdir;
     use crate::r2::LocalStore;
+    use crate::tempdir;
 
     fn roots(dir: &Path) -> Roots {
-        Roots { volume: dir.join("vol"), volume_weights: dir.join("vol/weights"), volume_extras: dir.join("vol/h3-rs"), stage_dir: dir.join("stage"), link_root: dir.join("w") }
+        Roots {
+            volume: dir.join("vol"),
+            volume_weights: dir.join("vol/weights"),
+            volume_extras: dir.join("vol/h3-rs"),
+            stage_dir: dir.join("stage"),
+            link_root: dir.join("w"),
+        }
     }
 
     /// fastvideo-rs's layout: weights/<dest>/<rev>/<path> + manifests/<dest>/<rev>.json.
@@ -638,12 +866,30 @@ mod tests {
         for (path, data) in files {
             let p = tmp.join(path.replace('/', "_"));
             std::fs::write(&p, data).unwrap();
-            store.put_file("fv-weights", &format!("weights/{dest}/{rev}/{path}"), &p, None).unwrap();
+            store
+                .put_file(
+                    "fv-weights",
+                    &format!("weights/{dest}/{rev}/{path}"),
+                    &p,
+                    None,
+                )
+                .unwrap();
             recs.push(json!({"path": path, "size": data.len(), "sha256": "x"}));
         }
         let m = tmp.join("m.json");
-        std::fs::write(&m, json!({"dest": dest, "rev": rev, "created_at": created, "files": recs}).to_string()).unwrap();
-        store.put_file("fv-weights", &format!("manifests/{dest}/{rev}.json"), &m, None).unwrap();
+        std::fs::write(
+            &m,
+            json!({"dest": dest, "rev": rev, "created_at": created, "files": recs}).to_string(),
+        )
+        .unwrap();
+        store
+            .put_file(
+                "fv-weights",
+                &format!("manifests/{dest}/{rev}.json"),
+                &m,
+                None,
+            )
+            .unwrap();
     }
 
     fn resolver(r: Roots, store: Option<Arc<dyn ObjectStore>>) -> WeightsResolver {
@@ -652,10 +898,41 @@ mod tests {
 
     #[test]
     fn tree_entry_parsing() {
-        assert_eq!(TreeEntry::parse("weights/h3-base").unwrap(), TreeEntry { kind: "volume".into(), source: "weights/h3-base".into(), name: "h3-base".into() });
-        assert_eq!(TreeEntry::parse("h3-rs/tables").unwrap(), TreeEntry { kind: "volume".into(), source: "h3-rs/tables".into(), name: "h3-rs/tables".into() });
-        assert_eq!(TreeEntry::parse("r2:fv-weights/weights/fastwan21-1.3b=fastwan").unwrap(), TreeEntry { kind: "r2".into(), source: "fv-weights/weights/fastwan21-1.3b".into(), name: "fastwan".into() });
-        assert_eq!(TreeEntry::parse("https:weights.fastwan.dev/v1/x.safetensors=fastwan-public/x.safetensors").unwrap(), TreeEntry { kind: "https".into(), source: "weights.fastwan.dev/v1/x.safetensors".into(), name: "fastwan-public/x.safetensors".into() });
+        assert_eq!(
+            TreeEntry::parse("weights/h3-base").unwrap(),
+            TreeEntry {
+                kind: "volume".into(),
+                source: "weights/h3-base".into(),
+                name: "h3-base".into()
+            }
+        );
+        assert_eq!(
+            TreeEntry::parse("h3-rs/tables").unwrap(),
+            TreeEntry {
+                kind: "volume".into(),
+                source: "h3-rs/tables".into(),
+                name: "h3-rs/tables".into()
+            }
+        );
+        assert_eq!(
+            TreeEntry::parse("r2:fv-weights/weights/fastwan21-1.3b=fastwan").unwrap(),
+            TreeEntry {
+                kind: "r2".into(),
+                source: "fv-weights/weights/fastwan21-1.3b".into(),
+                name: "fastwan".into()
+            }
+        );
+        assert_eq!(
+            TreeEntry::parse(
+                "https:weights.fastwan.dev/v1/x.safetensors=fastwan-public/x.safetensors"
+            )
+            .unwrap(),
+            TreeEntry {
+                kind: "https".into(),
+                source: "weights.fastwan.dev/v1/x.safetensors".into(),
+                name: "fastwan-public/x.safetensors".into()
+            }
+        );
         assert!(TreeEntry::parse("nope/x").is_err());
     }
 
@@ -666,14 +943,26 @@ mod tests {
         std::fs::create_dir_all(r.volume_weights.join("h3-base/transformer")).unwrap();
         std::fs::create_dir_all(r.volume_extras.join("tables")).unwrap();
         std::fs::create_dir_all(r.volume_weights.join("auxiliary/tae")).unwrap();
-        std::fs::write(r.volume_weights.join("auxiliary/tae/taeh3.safetensors"), b"t").unwrap();
+        std::fs::write(
+            r.volume_weights.join("auxiliary/tae/taeh3.safetensors"),
+            b"t",
+        )
+        .unwrap();
         let w = resolver(r.clone(), None);
         assert!(!w.ensure_tree("weights/h3-base").unwrap());
         assert!(!w.ensure_tree("h3-rs/tables").unwrap());
-        assert!(!w.ensure_tree("weights/auxiliary/tae/taeh3.safetensors").unwrap());
-        assert_eq!(realpath(&r.link_root.join("h3-base")), realpath(&r.volume_weights.join("h3-base")));
+        assert!(!w
+            .ensure_tree("weights/auxiliary/tae/taeh3.safetensors")
+            .unwrap());
+        assert_eq!(
+            realpath(&r.link_root.join("h3-base")),
+            realpath(&r.volume_weights.join("h3-base"))
+        );
         assert!(is_symlink(&r.link_root.join("h3-rs/tables")));
-        assert_eq!(std::fs::read(r.link_root.join("auxiliary/tae/taeh3.safetensors")).unwrap(), b"t");
+        assert_eq!(
+            std::fs::read(r.link_root.join("auxiliary/tae/taeh3.safetensors")).unwrap(),
+            b"t"
+        );
         assert!(!is_symlink(&r.link_root.join("auxiliary"))); // a real parent dir, no write through a volume link
         let st = w.status("weights/h3-base").unwrap();
         assert!(st.volume && st.linked && !st.staged);
@@ -687,16 +976,42 @@ mod tests {
         let r = roots(&dir);
         std::fs::create_dir_all(&r.volume_weights).unwrap();
         let store = LocalStore::new(dir.join("r2"));
-        publish(&store, "fastwan22-ti2v-5b", "3e18704", &[("transformer/a.safetensors", &[b'A'; 10]), ("config.json", b"{}")], "2026-10-11T00:00:00Z");
-        publish(&store, "fastwan22-ti2v-5b", "0000000", &[("old.bin", b"o")], "2026-01-01T00:00:00Z"); // an older revision loses
+        publish(
+            &store,
+            "fastwan22-ti2v-5b",
+            "3e18704",
+            &[
+                ("transformer/a.safetensors", &[b'A'; 10]),
+                ("config.json", b"{}"),
+            ],
+            "2026-10-11T00:00:00Z",
+        );
+        publish(
+            &store,
+            "fastwan22-ti2v-5b",
+            "0000000",
+            &[("old.bin", b"o")],
+            "2026-01-01T00:00:00Z",
+        ); // an older revision loses
         let w = resolver(r.clone(), Some(Arc::new(store)));
         assert!(w.ensure_tree("weights/fastwan22-ti2v-5b").unwrap());
         let dst = r.stage_dir.join("fastwan22-ti2v-5b");
-        assert_eq!(std::fs::read(dst.join("transformer/a.safetensors")).unwrap(), [b'A'; 10]);
+        assert_eq!(
+            std::fs::read(dst.join("transformer/a.safetensors")).unwrap(),
+            [b'A'; 10]
+        );
         assert!(dst.join("config.json").is_file());
-        assert_eq!(std::fs::read_to_string(dst.join(".fv-revision")).unwrap().trim(), "3e18704");
+        assert_eq!(
+            std::fs::read_to_string(dst.join(".fv-revision"))
+                .unwrap()
+                .trim(),
+            "3e18704"
+        );
         assert!(dst.join(COMPLETE_MARKER).is_file());
-        assert_eq!(realpath(&r.link_root.join("fastwan22-ti2v-5b")), realpath(&dst));
+        assert_eq!(
+            realpath(&r.link_root.join("fastwan22-ti2v-5b")),
+            realpath(&dst)
+        );
         assert!(!w.ensure_tree("weights/fastwan22-ti2v-5b").unwrap()); // idempotent
         let st = w.status("weights/fastwan22-ti2v-5b").unwrap();
         assert!(st.staged && st.linked && !st.volume);
@@ -708,15 +1023,35 @@ mod tests {
         let r = roots(&dir);
         std::fs::create_dir_all(&r.volume_weights).unwrap();
         let store = LocalStore::new(dir.join("r2"));
-        publish(&store, "auxiliary/tae", "eu-20261011", &[("taew2_1.safetensors", &[b'1'; 5]), ("taew2_2.safetensors", &[b'2'; 5]), ("taeh3.safetensors", b"3")], "2026-10-11T00:00:00Z");
+        publish(
+            &store,
+            "auxiliary/tae",
+            "eu-20261011",
+            &[
+                ("taew2_1.safetensors", &[b'1'; 5]),
+                ("taew2_2.safetensors", &[b'2'; 5]),
+                ("taeh3.safetensors", b"3"),
+            ],
+            "2026-10-11T00:00:00Z",
+        );
         let w = resolver(r.clone(), Some(Arc::new(store)));
-        assert!(w.ensure_tree("weights/auxiliary/tae/taew2_1.safetensors").unwrap());
+        assert!(w
+            .ensure_tree("weights/auxiliary/tae/taew2_1.safetensors")
+            .unwrap());
         let tree = r.stage_dir.join("auxiliary/tae");
-        assert_eq!(std::fs::read(tree.join("taew2_1.safetensors")).unwrap(), [b'1'; 5]);
+        assert_eq!(
+            std::fs::read(tree.join("taew2_1.safetensors")).unwrap(),
+            [b'1'; 5]
+        );
         assert!(!tree.join("taeh3.safetensors").exists());
         assert!(!tree.join(COMPLETE_MARKER).exists());
-        assert!(std::fs::read_to_string(tree.join(".studio-files")).unwrap().contains("taew2_1.safetensors"));
-        assert_eq!(std::fs::read(r.link_root.join("auxiliary/tae/taew2_1.safetensors")).unwrap(), [b'1'; 5]);
+        assert!(std::fs::read_to_string(tree.join(".studio-files"))
+            .unwrap()
+            .contains("taew2_1.safetensors"));
+        assert_eq!(
+            std::fs::read(r.link_root.join("auxiliary/tae/taew2_1.safetensors")).unwrap(),
+            [b'1'; 5]
+        );
         let e = w.ensure_tree("weights/nothing-here").unwrap_err();
         assert!(e.message.contains("no manifest"), "{}", e.message);
     }
@@ -726,11 +1061,30 @@ mod tests {
         let dir = tempdir("w-prefix");
         let r = roots(&dir);
         let store = LocalStore::new(dir.join("r2"));
-        publish(&store, "fastwan21-1.3b", "25e7ed7", &[("transformer/x.safetensors", b"xxx"), ("tokenizer/tokenizer.json", b"{}")], "2026-10-11T00:00:00Z");
+        publish(
+            &store,
+            "fastwan21-1.3b",
+            "25e7ed7",
+            &[
+                ("transformer/x.safetensors", b"xxx"),
+                ("tokenizer/tokenizer.json", b"{}"),
+            ],
+            "2026-10-11T00:00:00Z",
+        );
         let w = resolver(r.clone(), Some(Arc::new(store)));
-        assert!(w.ensure_tree("r2:fv-weights/weights/fastwan21-1.3b=fastwan").unwrap());
-        assert_eq!(std::fs::read(r.link_root.join("fastwan/transformer/x.safetensors")).unwrap(), b"xxx");
-        assert_eq!(std::fs::read_to_string(r.stage_dir.join("fastwan/.fv-revision")).unwrap().trim(), "25e7ed7");
+        assert!(w
+            .ensure_tree("r2:fv-weights/weights/fastwan21-1.3b=fastwan")
+            .unwrap());
+        assert_eq!(
+            std::fs::read(r.link_root.join("fastwan/transformer/x.safetensors")).unwrap(),
+            b"xxx"
+        );
+        assert_eq!(
+            std::fs::read_to_string(r.stage_dir.join("fastwan/.fv-revision"))
+                .unwrap()
+                .trim(),
+            "25e7ed7"
+        );
     }
 
     #[test]
@@ -738,7 +1092,13 @@ mod tests {
         let dir = tempdir("w-size");
         let r = roots(&dir);
         let store = LocalStore::new(dir.join("r2"));
-        publish(&store, "t", "r1", &[("a.bin", b"abc")], "2026-10-11T00:00:00Z");
+        publish(
+            &store,
+            "t",
+            "r1",
+            &[("a.bin", b"abc")],
+            "2026-10-11T00:00:00Z",
+        );
         let mp = store.root.join("fv-weights/manifests/t/r1.json");
         let mut m: Value = serde_json::from_slice(&std::fs::read(&mp).unwrap()).unwrap();
         m["files"][0]["size"] = json!(99);
@@ -753,10 +1113,18 @@ mod tests {
         let dir = tempdir("w-stage");
         let r = roots(&dir);
         let src = r.volume_weights.join("h3-8step");
-        for (sub, files) in [("transformer", vec!["a.safetensors", "b.safetensors"]), ("text_encoder", vec!["m.safetensors"]), ("vae", vec!["v.safetensors"])] {
+        for (sub, files) in [
+            ("transformer", vec!["a.safetensors", "b.safetensors"]),
+            ("text_encoder", vec!["m.safetensors"]),
+            ("vae", vec!["v.safetensors"]),
+        ] {
             std::fs::create_dir_all(src.join(sub)).unwrap();
             for f in files {
-                std::fs::write(src.join(sub).join(f), (0..64u8).map(|i| i.wrapping_mul(37)).collect::<Vec<_>>()).unwrap();
+                std::fs::write(
+                    src.join(sub).join(f),
+                    (0..64u8).map(|i| i.wrapping_mul(37)).collect::<Vec<_>>(),
+                )
+                .unwrap();
             }
         }
         std::fs::write(src.join("fastvideo_inference.json"), "{}").unwrap();
@@ -764,18 +1132,42 @@ mod tests {
         w.ensure_tree("weights/h3-8step").unwrap();
         assert!(w.stage("h3-8step:text_encoder,vae").unwrap());
         let dst = r.stage_dir.join("h3-8step");
-        assert!(dst.join("text_encoder/m.safetensors").is_file() && !is_symlink(&dst.join("text_encoder")));
-        assert_eq!(std::fs::read(dst.join("vae/v.safetensors")).unwrap(), std::fs::read(src.join("vae/v.safetensors")).unwrap());
-        assert!(is_symlink(&dst.join("transformer")) && realpath(&dst.join("transformer")) == realpath(&src.join("transformer")));
+        assert!(
+            dst.join("text_encoder/m.safetensors").is_file()
+                && !is_symlink(&dst.join("text_encoder"))
+        );
+        assert_eq!(
+            std::fs::read(dst.join("vae/v.safetensors")).unwrap(),
+            std::fs::read(src.join("vae/v.safetensors")).unwrap()
+        );
+        assert!(
+            is_symlink(&dst.join("transformer"))
+                && realpath(&dst.join("transformer")) == realpath(&src.join("transformer"))
+        );
         assert!(is_symlink(&dst.join("fastvideo_inference.json")));
         assert_eq!(realpath(&r.link_root.join("h3-8step")), realpath(&dst));
         assert!(dst.join(COMPLETE_MARKER).is_file());
         assert!(!w.stage("h3-8step:text_encoder,vae").unwrap()); // nothing to copy the second time
         assert!(w.stage("h3-8step").unwrap()); // a whole tree
-        assert!(!is_symlink(&dst.join("transformer")) && dst.join("transformer/b.safetensors").is_file());
-        let mut names: Vec<String> = std::fs::read_dir(&src).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(
+            !is_symlink(&dst.join("transformer"))
+                && dst.join("transformer/b.safetensors").is_file()
+        );
+        let mut names: Vec<String> = std::fs::read_dir(&src)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
         names.sort();
-        assert_eq!(names, ["fastvideo_inference.json", "text_encoder", "transformer", "vae"]); // the volume was never written
+        assert_eq!(
+            names,
+            [
+                "fastvideo_inference.json",
+                "text_encoder",
+                "transformer",
+                "vae"
+            ]
+        ); // the volume was never written
     }
 
     #[test]
@@ -786,7 +1178,12 @@ mod tests {
         std::fs::write(r.volume_weights.join("h3-base/vae/v"), b"v").unwrap();
         let notes = Arc::new(Mutex::new(Vec::new()));
         let n = notes.clone();
-        let w = WeightsResolver::new(r, None, Arc::new(move |s: &str| n.lock().unwrap().push(s.to_string())), false);
+        let w = WeightsResolver::new(
+            r,
+            None,
+            Arc::new(move |s: &str| n.lock().unwrap().push(s.to_string())),
+            false,
+        );
         w.ensure_tree("weights/h3-base").unwrap();
         assert!(w.stage("h3-base:nope,vae").unwrap());
         assert!(notes.lock().unwrap().iter().any(|n| n.contains("no nope")));
@@ -800,28 +1197,51 @@ mod tests {
         let r = roots(&dir);
         std::fs::create_dir_all(r.volume_weights.join("fastwan")).unwrap();
         let w = resolver(r.clone(), None);
-        let out = w.ensure_model(&["weights/fastwan".to_string()], &[], None).unwrap();
+        let out = w
+            .ensure_model(&["weights/fastwan".to_string()], &[], None)
+            .unwrap();
         assert!(out.fetched.is_empty() && out.staged.is_empty() && out.stage_s >= 0.0);
-        let dry = WeightsResolver { dry_run: true, ..resolver(r.clone(), None) };
+        let dry = WeightsResolver {
+            dry_run: true,
+            ..resolver(r.clone(), None)
+        };
         assert!(!dry.stage("fastwan").unwrap());
         assert!(!r.stage_dir.join("fastwan").exists() && is_symlink(&r.link_root.join("fastwan")));
     }
 
     struct Denied;
     impl ObjectStore for Denied {
-        fn put_file(&self, _: &str, _: &str, _: &Path, _: Option<&str>) -> anyhow::Result<()> { anyhow::bail!("AccessDenied") }
-        fn get_file(&self, _: &str, _: &str, _: &Path) -> anyhow::Result<u64> { anyhow::bail!("AccessDenied") }
-        fn get_bytes(&self, _: &str, _: &str) -> anyhow::Result<Vec<u8>> { anyhow::bail!("AccessDenied") }
-        fn list_keys(&self, _: &str, _: &str) -> anyhow::Result<Vec<(String, u64)>> { anyhow::bail!("AccessDenied: ListObjectsV2") }
-        fn head_size(&self, _: &str, _: &str) -> anyhow::Result<Option<u64>> { anyhow::bail!("AccessDenied") }
-        fn presign_get(&self, _: &str, _: &str, _: u64) -> String { String::new() }
+        fn put_file(&self, _: &str, _: &str, _: &Path, _: Option<&str>) -> anyhow::Result<()> {
+            anyhow::bail!("AccessDenied")
+        }
+        fn get_file(&self, _: &str, _: &str, _: &Path) -> anyhow::Result<u64> {
+            anyhow::bail!("AccessDenied")
+        }
+        fn get_bytes(&self, _: &str, _: &str) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("AccessDenied")
+        }
+        fn list_keys(&self, _: &str, _: &str) -> anyhow::Result<Vec<(String, u64)>> {
+            anyhow::bail!("AccessDenied: ListObjectsV2")
+        }
+        fn head_size(&self, _: &str, _: &str) -> anyhow::Result<Option<u64>> {
+            anyhow::bail!("AccessDenied")
+        }
+        fn presign_get(&self, _: &str, _: &str, _: u64) -> String {
+            String::new()
+        }
     }
 
     #[test]
     fn object_store_failure_is_a_stage_error() {
         let dir = tempdir("w-denied");
         let w = resolver(roots(&dir), Some(Arc::new(Denied)));
-        let e = w.ensure_tree("r2:fv-weights/weights/fastwan21-1.3b=fastwan").unwrap_err();
-        assert!(e.where_ == "stage" && e.message.contains("AccessDenied"), "{}", e.message);
+        let e = w
+            .ensure_tree("r2:fv-weights/weights/fastwan21-1.3b=fastwan")
+            .unwrap_err();
+        assert!(
+            e.where_ == "stage" && e.message.contains("AccessDenied"),
+            "{}",
+            e.message
+        );
     }
 }

@@ -24,11 +24,16 @@ pub const TAIL: usize = 50;
 pub fn http_info_probe(url: &str) -> Probe {
     let url = url.to_string();
     Arc::new(move || {
-        let Ok(info) = httpc::get_json(&url, 5.0) else { return (false, None) };
+        let Ok(info) = httpc::get_json(&url, 5.0) else {
+            return (false, None);
+        };
         if let Some(e) = info.get("error").filter(|e| crate::py::truthy(e)) {
             return (false, Some(crate::py::py_str(e)));
         }
-        (info.get("ready").map(crate::py::truthy).unwrap_or(false), None)
+        (
+            info.get("ready").map(crate::py::truthy).unwrap_or(false),
+            None,
+        )
     })
 }
 
@@ -36,12 +41,21 @@ pub fn http_info_probe(url: &str) -> Probe {
 pub fn ping_probe(url: &str) -> Probe {
     let url = url.to_string();
     Arc::new(move || {
-        let Ok((status, body)) = httpc::get_status(&url, 5.0) else { return (false, None) };
+        let Ok((status, body)) = httpc::get_status(&url, 5.0) else {
+            return (false, None);
+        };
         match status {
             200 => (true, None),
             503 => {
                 let text: String = String::from_utf8_lossy(&body).chars().take(300).collect();
-                (false, Some(if text.is_empty() { "fv-serve reports 503".into() } else { text }))
+                (
+                    false,
+                    Some(if text.is_empty() {
+                        "fv-serve reports 503".into()
+                    } else {
+                        text
+                    }),
+                )
             }
             _ => (false, None),
         }
@@ -83,7 +97,13 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
-    pub fn new(engine: &str, key: &str, argv: Vec<String>, env: HashMap<String, String>, probe: Probe) -> Sidecar {
+    pub fn new(
+        engine: &str,
+        key: &str,
+        argv: Vec<String>,
+        env: HashMap<String, String>,
+        probe: Probe,
+    ) -> Sidecar {
         Sidecar {
             engine: engine.into(),
             key: key.into(),
@@ -91,30 +111,54 @@ impl Sidecar {
             env,
             probe,
             log: crate::null_log(),
-            inner: Arc::new(Mutex::new(Inner { proc: None, lines: VecDeque::with_capacity(LOG_KEEP), started_at: 0.0, ready_at: None })),
+            inner: Arc::new(Mutex::new(Inner {
+                proc: None,
+                lines: VecDeque::with_capacity(LOG_KEEP),
+                started_at: 0.0,
+                ready_at: None,
+            })),
         }
     }
 
     pub fn start(&self) -> JobResult<()> {
         (self.log)(&format!("[{}] start: {}", self.engine, self.argv.join(" ")));
-        let (reader, writer) = std::io::pipe().map_err(|e| JobError::engine(format!("{}: pipe: {e}", self.engine), vec![]))?;
-        let writer2 = writer.try_clone().map_err(|e| JobError::engine(format!("{}: pipe: {e}", self.engine), vec![]))?;
+        let (reader, writer) = std::io::pipe()
+            .map_err(|e| JobError::engine(format!("{}: pipe: {e}", self.engine), vec![]))?;
+        let writer2 = writer
+            .try_clone()
+            .map_err(|e| JobError::engine(format!("{}: pipe: {e}", self.engine), vec![]))?;
         let mut cmd = Command::new(&self.argv[0]);
-        cmd.args(&self.argv[1..]).env_clear().envs(&self.env).stdin(Stdio::null()).stdout(Stdio::from(writer)).stderr(Stdio::from(writer2));
+        cmd.args(&self.argv[1..])
+            .env_clear()
+            .envs(&self.env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(writer))
+            .stderr(Stdio::from(writer2));
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-        let child = cmd.spawn().map_err(|e| JobError::engine(format!("{} failed to start: {}: {e}", self.engine, self.argv[0]), vec![]))?;
+        let child = cmd.spawn().map_err(|e| {
+            JobError::engine(
+                format!("{} failed to start: {}: {e}", self.engine, self.argv[0]),
+                vec![],
+            )
+        })?;
         drop(cmd); // the pipe's write ends live in `cmd`: drop them, or EOF never comes
         let mut inner = self.inner.lock().unwrap();
         inner.proc = Some(child);
         inner.started_at = now_s();
         inner.ready_at = None;
         drop(inner);
-        let (inner, log, engine) = (Arc::clone(&self.inner), self.log.clone(), self.engine.clone());
+        let (inner, log, engine) = (
+            Arc::clone(&self.inner),
+            self.log.clone(),
+            self.engine.clone(),
+        );
         std::thread::Builder::new()
             .name(format!("{engine}-log"))
             .spawn(move || {
                 for line in BufReader::new(reader).split(b'\n').map_while(|l| l.ok()) {
-                    let line = String::from_utf8_lossy(&line).trim_end_matches('\r').to_string();
+                    let line = String::from_utf8_lossy(&line)
+                        .trim_end_matches('\r')
+                        .to_string();
                     let mut g = inner.lock().unwrap();
                     if g.lines.len() >= LOG_KEEP {
                         g.lines.pop_front();
@@ -142,7 +186,10 @@ impl Sidecar {
 
     pub fn exit_code(&self) -> Option<i32> {
         let mut g = self.inner.lock().unwrap();
-        g.proc.as_mut().and_then(|p| p.try_wait().ok().flatten()).and_then(|s| s.code())
+        g.proc
+            .as_mut()
+            .and_then(|p| p.try_wait().ok().flatten())
+            .and_then(|s| s.code())
     }
 
     pub fn started_at(&self) -> f64 {
@@ -155,7 +202,15 @@ impl Sidecar {
 
     pub fn tail(&self, n: usize) -> Vec<String> {
         let g = self.inner.lock().unwrap();
-        g.lines.iter().rev().take(n).cloned().collect::<Vec<_>>().into_iter().rev().collect()
+        g.lines
+            .iter()
+            .rev()
+            .take(n)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
     }
 
     /// Tests: `proc.kill()` + `proc.wait()`.
@@ -175,12 +230,22 @@ impl Sidecar {
         loop {
             if !self.alive() {
                 let code = self.exit_code();
-                return Err(JobError::engine(format!("{} sidecar exited with code {} while loading", self.engine, code.map(|c| c.to_string()).unwrap_or_else(|| "None".into())), self.tail(TAIL)));
+                return Err(JobError::engine(
+                    format!(
+                        "{} sidecar exited with code {} while loading",
+                        self.engine,
+                        code.map(|c| c.to_string()).unwrap_or_else(|| "None".into())
+                    ),
+                    self.tail(TAIL),
+                ));
             }
             let (ready, err) = (self.probe)();
             if let Some(err) = err {
                 self.stop(15.0);
-                return Err(JobError::engine(format!("{} failed to start: {err}", self.engine), self.tail(TAIL)));
+                return Err(JobError::engine(
+                    format!("{} failed to start: {err}", self.engine),
+                    self.tail(TAIL),
+                ));
             }
             if ready {
                 let now = now_s();
@@ -190,7 +255,10 @@ impl Sidecar {
             let now = now_s();
             if now - t0 > timeout_s {
                 self.stop(15.0);
-                return Err(JobError::engine(format!("{} not ready after {timeout_s:.0} s", self.engine), self.tail(TAIL)));
+                return Err(JobError::engine(
+                    format!("{} not ready after {timeout_s:.0} s", self.engine),
+                    self.tail(TAIL),
+                ));
             }
             if let Some(p) = progress {
                 if now - last >= 5.0 {
@@ -244,7 +312,13 @@ impl Default for SidecarManager {
 
 impl SidecarManager {
     pub fn new(log: Log, load_timeout_s: f64) -> SidecarManager {
-        SidecarManager { log, sidecars: Mutex::new(Vec::new()), load_timeout_s, vram_margin_gib: 1.0, gpu_query: Arc::new(|| gpu::query(0)) }
+        SidecarManager {
+            log,
+            sidecars: Mutex::new(Vec::new()),
+            load_timeout_s,
+            vram_margin_gib: 1.0,
+            gpu_query: Arc::new(|| gpu::query(0)),
+        }
     }
 
     pub fn resident(&self) -> Map<String, Value> {
@@ -260,11 +334,21 @@ impl SidecarManager {
     }
 
     pub fn get(&self, engine: &str) -> Option<Sidecar> {
-        self.sidecars.lock().unwrap().iter().find(|(e, _)| e == engine).map(|(_, s)| s.clone())
+        self.sidecars
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(e, _)| e == engine)
+            .map(|(_, s)| s.clone())
     }
 
     pub fn engines(&self) -> Vec<String> {
-        self.sidecars.lock().unwrap().iter().map(|(e, _)| e.clone()).collect()
+        self.sidecars
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(e, _)| e.clone())
+            .collect()
     }
 
     pub fn contains(&self, engine: &str) -> bool {
@@ -281,7 +365,14 @@ impl SidecarManager {
     /// The engine's sidecar, started for `key` (restarted when it was
     /// running for another key or died). Returns it and the load seconds (0
     /// when it was already up).
-    pub fn ensure(&self, engine: &str, key: &str, make: &dyn Fn() -> Sidecar, vram_gib: f64, progress: Option<&dyn Fn(&str, f64)>) -> JobResult<(Sidecar, f64)> {
+    pub fn ensure(
+        &self,
+        engine: &str,
+        key: &str,
+        make: &dyn Fn() -> Sidecar,
+        vram_gib: f64,
+        progress: Option<&dyn Fn(&str, f64)>,
+    ) -> JobResult<(Sidecar, f64)> {
         let cur = self.get(engine);
         if let Some(cur) = &cur {
             if cur.alive() && cur.key == key {
@@ -290,13 +381,21 @@ impl SidecarManager {
                     return Ok((cur.clone(), 0.0));
                 }
                 if let Some(err) = err {
-                    (self.log)(&format!("[{engine}] resident sidecar reports an error, restarting: {err}"));
+                    (self.log)(&format!(
+                        "[{engine}] resident sidecar reports an error, restarting: {err}"
+                    ));
                 }
             }
         }
         if let Some(cur) = cur {
             if !cur.alive() && cur.pid().is_some() {
-                (self.log)(&format!("[{engine}] sidecar had exited (code {}); last lines: {}", cur.exit_code().map(|c| c.to_string()).unwrap_or_else(|| "None".into()), cur.tail(5).join(" | ")));
+                (self.log)(&format!(
+                    "[{engine}] sidecar had exited (code {}); last lines: {}",
+                    cur.exit_code()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "None".into()),
+                    cur.tail(5).join(" | ")
+                ));
             }
             cur.stop(15.0);
             self.remove(engine);
@@ -308,8 +407,16 @@ impl SidecarManager {
             p("loading", 0.0);
         }
         sc.start()?;
-        self.sidecars.lock().unwrap().push((engine.to_string(), sc.clone()));
-        let load_s = sc.wait_ready(self.load_timeout_s, progress.map(|p| Box::new(move |t: f64| p("loading", t)) as Box<dyn Fn(f64)>).as_deref())?;
+        self.sidecars
+            .lock()
+            .unwrap()
+            .push((engine.to_string(), sc.clone()));
+        let load_s = sc.wait_ready(
+            self.load_timeout_s,
+            progress
+                .map(|p| Box::new(move |t: f64| p("loading", t)) as Box<dyn Fn(f64)>)
+                .as_deref(),
+        )?;
         Ok((sc, load_s))
     }
 
@@ -326,7 +433,11 @@ impl SidecarManager {
             (self.log)(&format!("[{engine}] only {:.1} GiB free for a {vram_gib:.0} GiB model and nothing else to stop", g.free_gib()));
             return;
         }
-        (self.log)(&format!("[{engine}] {:.1} GiB free < {vram_gib:.0} GiB: stopping {}", g.free_gib(), others.join(", ")));
+        (self.log)(&format!(
+            "[{engine}] {:.1} GiB free < {vram_gib:.0} GiB: stopping {}",
+            g.free_gib(),
+            others.join(", ")
+        ));
         for e in &others {
             if let Some(s) = self.remove(e) {
                 s.stop(15.0);
@@ -340,7 +451,10 @@ impl SidecarManager {
             }
         }
         if let Some(g) = (self.gpu_query)() {
-            (self.log)(&format!("[{engine}] still only {:.1} GiB free; starting anyway", g.free_gib()));
+            (self.log)(&format!(
+                "[{engine}] still only {:.1} GiB free; starting anyway",
+                g.free_gib()
+            ));
         }
     }
 
@@ -362,11 +476,21 @@ mod tests {
 
     #[test]
     fn a_sidecar_keeps_its_log_tail_and_reports_exits() {
-        let sc = Sidecar::new("x", "k", sh("echo one; echo two 1>&2; sleep 0.2; exit 3"), HashMap::new(), Arc::new(|| (false, None)));
+        let sc = Sidecar::new(
+            "x",
+            "k",
+            sh("echo one; echo two 1>&2; sleep 0.2; exit 3"),
+            HashMap::new(),
+            Arc::new(|| (false, None)),
+        );
         sc.start().unwrap();
         let e = sc.wait_ready(5.0, None).unwrap_err();
         assert_eq!(e.where_, "engine");
-        assert!(e.message.contains("exited with code 3 while loading"), "{}", e.message);
+        assert!(
+            e.message.contains("exited with code 3 while loading"),
+            "{}",
+            e.message
+        );
         let mut tail = e.log_tail.clone();
         tail.sort();
         assert_eq!(tail, ["one", "two"]);
@@ -382,7 +506,13 @@ mod tests {
             *n += 1;
             (*n >= 2, None)
         });
-        let sc = Sidecar::new("x", "k", sh("trap 'exit 0' TERM; while true; do sleep 0.1; done"), HashMap::new(), probe);
+        let sc = Sidecar::new(
+            "x",
+            "k",
+            sh("trap 'exit 0' TERM; while true; do sleep 0.1; done"),
+            HashMap::new(),
+            probe,
+        );
         sc.start().unwrap();
         let t = sc.wait_ready(5.0, None).unwrap();
         assert!(t >= 0.4 && sc.alive() && sc.ready_at().is_some());
@@ -392,7 +522,13 @@ mod tests {
 
     #[test]
     fn a_fatal_probe_stops_the_process() {
-        let sc = Sidecar::new("fv", "k", sh("sleep 10"), HashMap::new(), Arc::new(|| (false, Some("boom".into()))));
+        let sc = Sidecar::new(
+            "fv",
+            "k",
+            sh("sleep 10"),
+            HashMap::new(),
+            Arc::new(|| (false, Some("boom".into()))),
+        );
         sc.start().unwrap();
         let e = sc.wait_ready(5.0, None).unwrap_err();
         assert!(e.message.contains("fv failed to start: boom"));
@@ -403,8 +539,21 @@ mod tests {
     fn manager_reuses_restarts_and_makes_room() {
         let logs = Arc::new(Mutex::new(Vec::new()));
         let l = logs.clone();
-        let m = SidecarManager::new(Arc::new(move |s: &str| l.lock().unwrap().push(s.to_string())), 5.0);
-        let make = |engine: &'static str, key: &'static str| move || Sidecar::new(engine, key, sh("trap 'exit 0' TERM; while true; do sleep 0.1; done"), HashMap::new(), Arc::new(|| (true, None)));
+        let m = SidecarManager::new(
+            Arc::new(move |s: &str| l.lock().unwrap().push(s.to_string())),
+            5.0,
+        );
+        let make = |engine: &'static str, key: &'static str| {
+            move || {
+                Sidecar::new(
+                    engine,
+                    key,
+                    sh("trap 'exit 0' TERM; while true; do sleep 0.1; done"),
+                    HashMap::new(),
+                    Arc::new(|| (true, None)),
+                )
+            }
+        };
         let (a, t) = m.ensure("h3", "a", &make("h3", "a"), 0.0, None).unwrap();
         assert!(t >= 0.0 && a.alive());
         let pid = a.pid();
@@ -417,13 +566,34 @@ mod tests {
         b.kill_now();
         let (c, _) = m.ensure("h3", "b", &make("h3", "b"), 0.0, None).unwrap(); // died: restarted
         assert_ne!(c.pid(), b.pid());
-        assert!(logs.lock().unwrap().iter().any(|s| s.contains("sidecar had exited")));
+        assert!(logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.contains("sidecar had exited")));
         // make_room: a tiny GPU evicts the other engine.
-        let m2 = SidecarManager { gpu_query: Arc::new(|| Some(GpuInfo { name: "g".into(), driver: "1".into(), memory_total_mib: 8192, memory_free_mib: 1024, compute_cap: None })), ..SidecarManager::new(m.log.clone(), 5.0) };
+        let m2 = SidecarManager {
+            gpu_query: Arc::new(|| {
+                Some(GpuInfo {
+                    name: "g".into(),
+                    driver: "1".into(),
+                    memory_total_mib: 8192,
+                    memory_free_mib: 1024,
+                    compute_cap: None,
+                })
+            }),
+            ..SidecarManager::new(m.log.clone(), 5.0)
+        };
         let (h, _) = m2.ensure("h3", "a", &make("h3", "a"), 0.0, None).unwrap();
-        let (_f, _) = m2.ensure("fastwan", "a", &make("fastwan", "a"), 4.0, None).unwrap();
+        let (_f, _) = m2
+            .ensure("fastwan", "a", &make("fastwan", "a"), 4.0, None)
+            .unwrap();
         assert!(!h.alive() && m2.engines() == ["fastwan"]);
-        assert!(logs.lock().unwrap().iter().any(|s| s.contains("1.0 GiB free < 4 GiB: stopping h3")));
+        assert!(logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.contains("1.0 GiB free < 4 GiB: stopping h3")));
         let r = m2.resident();
         assert_eq!(r["fastwan"]["alive"], json!(true));
         assert!(r["fastwan"]["ready_s"].is_number());

@@ -18,7 +18,11 @@ pub fn float_repr(v: f64) -> String {
         return if v > 0.0 { "inf".into() } else { "-inf".into() };
     }
     if v == 0.0 {
-        return if v.is_sign_negative() { "-0.0".into() } else { "0.0".into() };
+        return if v.is_sign_negative() {
+            "-0.0".into()
+        } else {
+            "0.0".into()
+        };
     }
     // `{:e}` gives the shortest round-trip mantissa: "1.5e2", "-3e-7".
     let s = format!("{:e}", v);
@@ -118,7 +122,11 @@ pub fn py_repr(v: &Value) -> String {
 
 /// `repr(str)`: single quotes unless the string holds one and no double quote.
 pub fn py_str_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let q = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(q);
     for c in s.chars() {
@@ -215,7 +223,13 @@ pub fn dumps(value: &Value, indent: Option<usize>, ensure_ascii: bool) -> String
     out
 }
 
-fn write_value(out: &mut String, v: &Value, indent: Option<usize>, ensure_ascii: bool, level: usize) {
+fn write_value(
+    out: &mut String,
+    v: &Value,
+    indent: Option<usize>,
+    ensure_ascii: bool,
+    level: usize,
+) {
     match v {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -290,7 +304,9 @@ pub fn shlex_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".into();
     }
-    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    let safe = s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
     if safe {
         s.to_string()
     } else {
@@ -300,7 +316,10 @@ pub fn shlex_quote(s: &str) -> String {
 
 /// `shlex.join`.
 pub fn shlex_join<S: AsRef<str>>(argv: &[S]) -> String {
-    argv.iter().map(|a| shlex_quote(a.as_ref())).collect::<Vec<_>>().join(" ")
+    argv.iter()
+        .map(|a| shlex_quote(a.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `urllib.parse.quote(s, safe=safe)`: UTF-8 bytes, `-_.~` and ASCII
@@ -333,7 +352,14 @@ pub fn utc_parts(unix_s: i64) -> (i64, u32, u32, u32, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d, (rem / 3600) as u32, ((rem % 3600) / 60) as u32, (rem % 60) as u32)
+    (
+        y,
+        m,
+        d,
+        (rem / 3600) as u32,
+        ((rem % 3600) / 60) as u32,
+        (rem % 60) as u32,
+    )
 }
 
 /// `strftime("%Y%m%dT%H%M%SZ")` (SigV4's `X-Amz-Date`).
@@ -352,7 +378,11 @@ pub fn iso_utc(unix_s: i64) -> String {
 pub fn which(name: &str) -> Option<PathBuf> {
     if name.contains('/') {
         let p = Path::new(name);
-        return if is_executable(p) { Some(p.to_path_buf()) } else { None };
+        return if is_executable(p) {
+            Some(p.to_path_buf())
+        } else {
+            None
+        };
     }
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -366,7 +396,9 @@ pub fn which(name: &str) -> Option<PathBuf> {
 
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    p.metadata().map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    p.metadata()
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 /// `os.path.realpath`: resolves what exists and keeps the rest of the path.
@@ -384,7 +416,10 @@ pub fn realpath(p: &Path) -> PathBuf {
             }
             return out;
         }
-        match (cur.file_name().map(|f| f.to_os_string()), cur.parent().map(|q| q.to_path_buf())) {
+        match (
+            cur.file_name().map(|f| f.to_os_string()),
+            cur.parent().map(|q| q.to_path_buf()),
+        ) {
             (Some(name), Some(parent)) if !parent.as_os_str().is_empty() => {
                 rest.push(name);
                 cur = parent;
@@ -434,27 +469,54 @@ mod tests {
 
     #[test]
     fn g6_matches_python() {
-        for (v, want) in [(0.9, "0.9"), (1.0, "1"), (0.85, "0.85"), (1234567.0, "1.23457e+06"), (0.00001234, "1.234e-05"), (2.5, "2.5"), (100.0, "100")] {
+        for (v, want) in [
+            (0.9, "0.9"),
+            (1.0, "1"),
+            (0.85, "0.85"),
+            (1234567.0, "1.23457e+06"),
+            (0.00001234, "1.234e-05"),
+            (2.5, "2.5"),
+            (100.0, "100"),
+        ] {
             assert_eq!(format_g6(v), want, "{v}");
         }
     }
 
     #[test]
     fn dumps_matches_python() {
-        let v = json!({"a": 1, "b": [1.5, "x", null, true], "c": {}, "d": [], "e": "ü✓", "f": "q\"\n"});
-        assert_eq!(dumps(&v, None, false), r#"{"a": 1, "b": [1.5, "x", null, true], "c": {}, "d": [], "e": "ü✓", "f": "q\"\n"}"#);
-        assert_eq!(dumps(&json!({"e": "ü✓𝄞"}), None, true), "{\"e\": \"\\u00fc\\u2713\\ud834\\udd1e\"}");
-        assert_eq!(dumps(&json!({"a": [1, {"b": 2}], "c": {}}), Some(1), true), "{\n \"a\": [\n  1,\n  {\n   \"b\": 2\n  }\n ],\n \"c\": {}\n}");
+        let v =
+            json!({"a": 1, "b": [1.5, "x", null, true], "c": {}, "d": [], "e": "ü✓", "f": "q\"\n"});
+        assert_eq!(
+            dumps(&v, None, false),
+            r#"{"a": 1, "b": [1.5, "x", null, true], "c": {}, "d": [], "e": "ü✓", "f": "q\"\n"}"#
+        );
+        assert_eq!(
+            dumps(&json!({"e": "ü✓𝄞"}), None, true),
+            "{\"e\": \"\\u00fc\\u2713\\ud834\\udd1e\"}"
+        );
+        assert_eq!(
+            dumps(&json!({"a": [1, {"b": 2}], "c": {}}), Some(1), true),
+            "{\n \"a\": [\n  1,\n  {\n   \"b\": 2\n  }\n ],\n \"c\": {}\n}"
+        );
     }
 
     #[test]
     fn shlex_and_quote() {
-        assert_eq!(shlex_join(&["h3", "generate", "--prompt", "it's a 'fox'"]), "h3 generate --prompt 'it'\"'\"'s a '\"'\"'fox'\"'\"''");
+        assert_eq!(
+            shlex_join(&["h3", "generate", "--prompt", "it's a 'fox'"]),
+            "h3 generate --prompt 'it'\"'\"'s a '\"'\"'fox'\"'\"''"
+        );
         assert_eq!(shlex_quote(""), "''");
         assert_eq!(shlex_quote("a b"), "'a b'");
-        assert_eq!(quote("uploads/a b/ü (1)+x&y=z#!'*.png", "/"), "uploads/a%20b/%C3%BC%20%281%29%2Bx%26y%3Dz%23%21%27%2A.png");
+        assert_eq!(
+            quote("uploads/a b/ü (1)+x&y=z#!'*.png", "/"),
+            "uploads/a%20b/%C3%BC%20%281%29%2Bx%26y%3Dz%23%21%27%2A.png"
+        );
         assert_eq!(quote("a/b", ""), "a%2Fb");
-        assert_eq!(quote("fvstudio-worker/0.1.0", ""), "fvstudio-worker%2F0.1.0");
+        assert_eq!(
+            quote("fvstudio-worker/0.1.0", ""),
+            "fvstudio-worker%2F0.1.0"
+        );
     }
 
     #[test]

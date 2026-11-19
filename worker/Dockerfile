@@ -59,6 +59,11 @@ RUN strip /out/h3 /out/fastwan && /out/h3 --help >/dev/null && /out/fastwan --he
 
 # ---- stage 2: the file source --------------------------------------------------
 FROM ${FV_SERVE_IMAGE} AS fv
+# cuDNN's libraries are symlink chains (libcudnn_graph.so.9 → .so.9.26.0); a
+# glob COPY resolves every name into a full copy (the first build doubled
+# them to an 836 MB layer), so gather them with cp -a into one directory the
+# final stage copies as a directory, which keeps the links.
+RUN mkdir -p /cudnn && cp -a /usr/lib/x86_64-linux-gnu/libcudnn*.so* /cudnn/
 
 # ---- stage 3: the worker -------------------------------------------------------
 FROM ubuntu:22.04
@@ -70,7 +75,7 @@ RUN apt-get update \
 # CUDA 13.4 (cuBLAS, cuBLASLt, NVRTC + builtins, cudart) and cuDNN 9 from the
 # serve image; libcuda comes from the host driver at run time (R580+).
 COPY --from=fv /usr/local/cuda-13.4/lib64/ /usr/local/cuda-13.4/lib64/
-COPY --from=fv /usr/lib/x86_64-linux-gnu/libcudnn*.so* /usr/lib/x86_64-linux-gnu/
+COPY --from=fv /cudnn/ /usr/lib/x86_64-linux-gnu/
 COPY --from=fv /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/llama-server /opt/fastvideo-rs/bin/llama-server.version /opt/fastvideo-rs/bin/
 COPY --from=fv /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 RUN echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/cuda.conf && ldconfig \

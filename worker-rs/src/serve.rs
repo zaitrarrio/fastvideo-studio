@@ -13,8 +13,12 @@
 //! | `POST /streams` | `{model, prompt, max_seconds?, seed?, resolution?, aspect_ratio?, output?}`: fv-serve's `POST /fv/v1/streams` on the model's process group (started when it is not up), `output` defaulting to Cloudflare Stream → the stream object (`playback.whep_url`) |
 //! | `GET /streams`, `GET /streams/{id}`, `POST /streams/{id}/commands`, `DELETE /streams/{id}` | forwarded to that fv-serve |
 //!
-//! A live stream holds the GPU: jobs wait in the queue ("waiting for the
-//! live stream") until every stream of the pod has ended.
+//! | `POST /segments` | `{stream_id, segment_index, model, prompt, duration_sec, …}`: fv-serve's `POST /fv/v1/segments` on the model's process group → 202 segment object |
+//! | `GET /segments/{id}` | the segment; once `succeeded` its MP4 is mirrored from fv-serve to R2 and `video_url` is the presigned copy (`fv_video_url` keeps fv-serve's) |
+//! | `GET /segments/streams/{stream_id}`, `DELETE …` | the segment stream's session, forwarded |
+//!
+//! A live stream or a segment stream holds the GPU: jobs wait in the queue
+//! ("waiting for the live stream") until every one of the pod has ended.
 //!
 //! Bearer `STUDIO_SERVE_TOKEN` on every route (`STUDIO_SERVE_NO_AUTH=1` for
 //! tests). `STUDIO_POD_HOURS` (default 4) is the wall-clock cap: at it the
@@ -140,6 +144,10 @@ struct State {
     running: Mutex<Option<String>>,
     /// Live streams: id → the fv-serve base they run on.
     live: Mutex<HashMap<String, String>>,
+    /// Segment streams: stream_id → the fv-serve base; and the mirrored
+    /// segments: segment id → the presigned R2 URL of its MP4.
+    seg_streams: Mutex<HashMap<String, String>>,
+    seg_urls: Mutex<HashMap<String, Value>>,
     stop: AtomicBool,
     jobs_done: AtomicU64,
     started: f64,
@@ -219,7 +227,10 @@ impl State {
             }
             // A live stream holds the GPU: wait for it to end (or the job to be cancelled).
             let mut waited = false;
-            while !self.live.lock().unwrap().is_empty() && !self.stop.load(Ordering::SeqCst) {
+            while (!self.live.lock().unwrap().is_empty()
+                || !self.seg_streams.lock().unwrap().is_empty())
+                && !self.stop.load(Ordering::SeqCst)
+            {
                 if self
                     .job(&next)
                     .map(|j| j.status != "IN_QUEUE")
@@ -339,6 +350,7 @@ impl State {
             "pod": self.cfg.runpod_pod_id,
             "pod_hours": self.cfg.pod_hours,
             "streams": self.live.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
+            "segment_streams": self.seg_streams.lock().unwrap().keys().cloned().collect::<Vec<_>>(),
             "image": self.worker.cfg.image,
             "sidecars": self.worker.sidecars.resident(),
         })
@@ -603,6 +615,215 @@ fn handle_streams(state: &Arc<State>, mut req: Request, method: Method, path: &s
     }
 }
 
+/// The segments (docs/pod-mode.md §2, phase 3): fv-serve's `/fv/v1/segments`
+/// on the model's fv-serve; a finished segment's MP4 is mirrored to R2 so the
+/// page plays a presigned URL (fv-serve's signed local URL is not reachable
+/// from outside the pod).
+fn handle_segments(state: &Arc<State>, mut req: Request, method: Method, path: &str) {
+    let seg_id_ok = |id: &str| {
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    };
+    if method == Method::Post && path == "/segments" {
+        let body = match read_body(&mut req) {
+            Ok(b) if b.is_object() => b,
+            Ok(_) => {
+                return reply(
+                    req,
+                    400,
+                    &json!({"error": "the body must be a JSON object"}),
+                )
+            }
+            Err(e) => return reply(req, 400, &json!({"error": e})),
+        };
+        let stream_id = body.get("stream_id").map(py_str).unwrap_or_default();
+        let model_id = body.get("model").map(py_str).unwrap_or_default();
+        let prompt = body.get("prompt").map(py_str).unwrap_or_default();
+        if stream_id.is_empty()
+            || model_id.is_empty()
+            || prompt.trim().is_empty()
+            || body.get("segment_index").and_then(|i| i.as_u64()).is_none()
+        {
+            return reply(
+                req,
+                400,
+                &json!({"error": "stream_id, segment_index, model and prompt are required"}),
+            );
+        }
+        if !seg_id_ok(&stream_id) {
+            return reply(
+                req,
+                400,
+                &json!({"error": "stream_id: letters, digits, - _ . only"}),
+            );
+        }
+        let Some(model) = state.worker.catalog.model("fastvideo", &model_id).cloned() else {
+            return reply(
+                req,
+                400,
+                &json!({"error": format!("unknown fastvideo model {}", crate::py::py_str_repr(&model_id))}),
+            );
+        };
+        let variant = model.recipe.get("variant").map(py_str).unwrap_or_default();
+        // A stream keeps the fv-serve it opened on.
+        let known = state.seg_streams.lock().unwrap().get(&stream_id).cloned();
+        let (base, load_s) = match known {
+            Some(b) => (b, 0.0),
+            None => match state.worker.fastvideo_serve(&model.id, None) {
+                Ok(v) => v,
+                Err(e) => return reply(req, 503, &e.to_output()),
+            },
+        };
+        let mut out = body.as_object().cloned().unwrap_or_default();
+        out.insert("model".into(), json!(variant));
+        let (code, mut v) = forward(
+            "POST",
+            &format!("{base}/fv/v1/segments"),
+            Some(&Value::Object(out)),
+        );
+        if (200..300).contains(&code) {
+            state
+                .seg_streams
+                .lock()
+                .unwrap()
+                .insert(stream_id.clone(), base.clone());
+            if let Value::Object(o) = &mut v {
+                o.insert("studio_model".into(), json!(model.id));
+                o.insert("load_s".into(), json!(crate::py::round_to(load_s, 1)));
+            }
+        }
+        return reply(req, code, &v);
+    }
+    if let Some(rest) = path.strip_prefix("/segments/streams/") {
+        let sid = rest.trim_end_matches('/');
+        if !seg_id_ok(sid) {
+            return reply(req, 404, &json!({"error": "no such stream"}));
+        }
+        let Some(base) = state.seg_streams.lock().unwrap().get(sid).cloned() else {
+            return reply(
+                req,
+                404,
+                &json!({"error": "no such segment stream on this pod"}),
+            );
+        };
+        return match method {
+            Method::Get => {
+                let (code, v) =
+                    forward("GET", &format!("{base}/fv/v1/segments/streams/{sid}"), None);
+                if code == 404 {
+                    state.seg_streams.lock().unwrap().remove(sid);
+                }
+                reply(req, code, &v)
+            }
+            Method::Delete => {
+                let (code, v) = forward(
+                    "DELETE",
+                    &format!("{base}/fv/v1/segments/streams/{sid}"),
+                    None,
+                );
+                if (200..300).contains(&code) || code == 404 {
+                    state.seg_streams.lock().unwrap().remove(sid);
+                }
+                reply(req, code, &v)
+            }
+            _ => reply(req, 405, &json!({"error": "method not allowed"})),
+        };
+    }
+    let id = path
+        .strip_prefix("/segments/")
+        .unwrap_or("")
+        .trim_end_matches('/');
+    if method != Method::Get || !seg_id_ok(id) {
+        return reply(
+            req,
+            if method == Method::Get { 404 } else { 405 },
+            &json!({"error": "no such segment"}),
+        );
+    }
+    // A segment is looked up on every fv-serve a segment stream runs on (one in practice).
+    let bases: HashSet<String> = state
+        .seg_streams
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect();
+    let mut found: Option<(u16, Value)> = None;
+    for b in bases {
+        let (code, v) = forward("GET", &format!("{b}/fv/v1/segments/{id}"), None);
+        if code != 404 {
+            found = Some((code, v));
+            break;
+        }
+    }
+    let Some((code, mut v)) = found else {
+        return reply(req, 404, &json!({"error": "no such segment on this pod"}));
+    };
+    if code == 200 && v.get("status").and_then(|s| s.as_str()) == Some("succeeded") {
+        // The guard must not live into the branch that locks again.
+        let mirrored = state.seg_urls.lock().unwrap().get(id).cloned();
+        let fv_url = v
+            .get("video_url")
+            .and_then(|u| u.as_str())
+            .map(str::to_string);
+        match (mirrored, fv_url) {
+            (Some(m), _) => {
+                v["fv_video_url"] = v["video_url"].clone();
+                v["video_url"] = m;
+            }
+            (None, Some(url)) => match mirror_segment(state, id, &v, &url) {
+                Ok(presigned) => {
+                    state
+                        .seg_urls
+                        .lock()
+                        .unwrap()
+                        .insert(id.to_string(), presigned.clone());
+                    v["fv_video_url"] = json!(url);
+                    v["video_url"] = presigned;
+                }
+                Err(e) => {
+                    v["mirror_error"] = json!(e);
+                }
+            },
+            (None, None) => {}
+        }
+    }
+    reply(req, code, &v)
+}
+
+/// Download a finished segment from fv-serve and put it in the bucket under
+/// `segments/<stream>/<index>-<id>.mp4`; the presigned URL back.
+fn mirror_segment(state: &Arc<State>, id: &str, seg: &Value, url: &str) -> Result<Value, String> {
+    let (Some(store), Some(bucket)) = (state.worker.store.as_ref(), state.worker.bucket.as_ref())
+    else {
+        return Err("no object store on this pod: the MP4 stays on fv-serve".into());
+    };
+    let dir = state.worker.cfg.jobs_dir.join("segments");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let local = dir.join(format!("{id}.mp4"));
+    crate::httpc::download(url, &local, 300.0, None).map_err(|e| format!("download: {e}"))?;
+    let stream = seg
+        .get("stream_id")
+        .map(py_str)
+        .unwrap_or_else(|| "stream".into());
+    let index = seg
+        .get("segment_index")
+        .and_then(|i| i.as_u64())
+        .unwrap_or(0);
+    let key = format!("segments/{stream}/{index:04}-{id}.mp4");
+    store
+        .put_file(bucket, &key, &local, Some("video/mp4"))
+        .map_err(|e| format!("upload: {e}"))?;
+    let _ = std::fs::remove_file(&local);
+    Ok(json!(store.presign_get(
+        bucket,
+        &key,
+        state.worker.cfg.url_ttl_s
+    )))
+}
+
 /// One request. `POST /jobs` takes `{"input": …}` (RunPod's envelope) or
 /// the input itself.
 fn handle(state: &Arc<State>, mut req: Request) {
@@ -619,6 +840,9 @@ fn handle(state: &Arc<State>, mut req: Request) {
     }
     if path == "/streams" || path.starts_with("/streams/") {
         return handle_streams(state, req, method, &path);
+    }
+    if path == "/segments" || path.starts_with("/segments/") {
+        return handle_segments(state, req, method, &path);
     }
     match (method, path.as_str()) {
         (Method::Get, "/health") => reply(req, 200, &state.health()),
@@ -650,11 +874,8 @@ fn handle(state: &Arc<State>, mut req: Request) {
                 }
             }
             let id = state.submit(input);
-            let status = state
-                .job(&id)
-                .map(|j| j.status)
-                .unwrap_or_else(|| "IN_QUEUE".into());
-            reply(req, 202, &json!({"id": id, "status": status}))
+            // RunPod's answer to /run: the job is queued, whatever the thread does next.
+            reply(req, 202, &json!({"id": id, "status": "IN_QUEUE"}))
         }
         (m, p) if p.starts_with("/jobs/") => {
             let rest = &p["/jobs/".len()..];
@@ -731,6 +952,8 @@ pub fn serve(
         wake: Condvar::new(),
         running: Mutex::new(None),
         live: Mutex::new(HashMap::new()),
+        seg_streams: Mutex::new(HashMap::new()),
+        seg_urls: Mutex::new(HashMap::new()),
         stop: AtomicBool::new(false),
         jobs_done: AtomicU64::new(0),
         started: now_s(),

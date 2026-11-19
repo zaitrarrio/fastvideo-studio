@@ -483,6 +483,9 @@ pub struct FvState {
     /// Live streams (`/fv/v1/streams`): id → the stream object.
     pub streams: Map<String, Value>,
     pub commands: Vec<(String, Value)>,
+    /// Segments (`/fv/v1/segments`): id → the segment object; sessions by stream id.
+    pub segments: Map<String, Value>,
+    pub seg_sessions: Map<String, Value>,
 }
 
 /// A tiny fake of fv-serve's native jobs API (`/ping`, `/fv/v1/capabilities`,
@@ -550,22 +553,48 @@ impl FakeFvServe {
                     &json!({"auth": {"mode": "none"}, "protocols": ["native"], "models": []}),
                 ),
                 (Method::Post, "/fv/v1/streams") => {
-                    let body: Value = serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
+                    let body: Value =
+                        serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
                     let mut s = st.lock().unwrap();
                     s.requests.push(body.clone());
-                    let model = body.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
-                    if model.is_empty() || body.get("prompt").and_then(|p| p.as_str()).unwrap_or("").is_empty() {
+                    let model = body
+                        .get("model")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if model.is_empty()
+                        || body
+                            .get("prompt")
+                            .and_then(|p| p.as_str())
+                            .unwrap_or("")
+                            .is_empty()
+                    {
                         drop(s);
-                        respond_json(req, 400, &json!({"error": {"kind": "invalid_request", "message": "model and prompt are required"}}));
+                        respond_json(
+                            req,
+                            400,
+                            &json!({"error": {"kind": "invalid_request", "message": "model and prompt are required"}}),
+                        );
                         return;
                     }
-                    if s.streams.values().any(|v| v["status"]["state"] == "running") {
+                    if s.streams
+                        .values()
+                        .any(|v| v["status"]["state"] == "running")
+                    {
                         drop(s);
-                        respond_json(req, 429, &json!({"error": {"kind": "busy", "message": "a streaming session holds this GPU"}}));
+                        respond_json(
+                            req,
+                            429,
+                            &json!({"error": {"kind": "busy", "message": "a streaming session holds this GPU"}}),
+                        );
                         return;
                     }
                     let id = format!("fvstream_{}", s.streams.len() + 1);
-                    let mode = if model.starts_with("sfwan") || model.starts_with("longlive") { "causal" } else { "clip" };
+                    let mode = if model.starts_with("sfwan") || model.starts_with("longlive") {
+                        "causal"
+                    } else {
+                        "clip"
+                    };
                     let obj = json!({
                         "id": id, "model": model, "mode": mode,
                         "status": {"state": "running", "output_state": "publishing"},
@@ -576,6 +605,99 @@ impl FakeFvServe {
                     s.streams.insert(id.clone(), obj.clone());
                     drop(s);
                     respond_json(req, 201, &obj);
+                }
+                (Method::Post, "/fv/v1/segments") => {
+                    let body: Value =
+                        serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
+                    let mut s = st.lock().unwrap();
+                    s.requests.push(body.clone());
+                    let sid = body["stream_id"].as_str().unwrap_or("").to_string();
+                    if sid.is_empty() || body["prompt"].as_str().unwrap_or("").is_empty() {
+                        drop(s);
+                        respond_json(
+                            req,
+                            400,
+                            &json!({"error": {"kind": "invalid_param", "message": "stream_id and prompt"}}),
+                        );
+                        return;
+                    }
+                    let n = s.segments.len() + 1;
+                    let id = format!("seg_{n}");
+                    let model = body["model"].as_str().unwrap_or("").to_string();
+                    let path = if model.starts_with("sfwan") || model.starts_with("longlive") {
+                        "causal"
+                    } else {
+                        "clip"
+                    };
+                    // Succeeds on its first poll with a real MP4 at /files/<id>.mp4.
+                    let mp4 = fd.join(format!("{id}.mp4"));
+                    if !mp4.exists() {
+                        std::fs::create_dir_all(&fd).unwrap();
+                        make_mp4(&mp4, 832, 480, 9, 16, false);
+                    }
+                    let obj = json!({
+                        "id": id, "object": "fv.segment", "stream_id": sid, "segment_index": body["segment_index"],
+                        "status": "queued", "video_url": Value::Null, "frames": 0, "fps": 16, "width": 832, "height": 480,
+                        "path": path, "planned_frames": 96,
+                    });
+                    s.segments.insert(id.clone(), obj.clone());
+                    let ses = s.seg_sessions.entry(sid.clone()).or_insert_with(
+                        || json!({"stream_id": sid, "path": path, "model": model, "segments": 0}),
+                    );
+                    ses["segments"] = json!(ses["segments"].as_u64().unwrap_or(0) + 1);
+                    drop(s);
+                    respond_json(req, 202, &obj);
+                }
+                (Method::Get, p) if p.starts_with("/fv/v1/segments/streams/") => {
+                    let sid = p["/fv/v1/segments/streams/".len()..].to_string();
+                    let s = st.lock().unwrap();
+                    let ses = s.seg_sessions.get(&sid).cloned();
+                    drop(s);
+                    match ses {
+                        Some(v) => respond_json(req, 200, &v),
+                        None => respond_json(
+                            req,
+                            404,
+                            &json!({"error": {"kind": "not_found", "message": "no such stream"}}),
+                        ),
+                    }
+                }
+                (Method::Delete, p) if p.starts_with("/fv/v1/segments/streams/") => {
+                    let sid = p["/fv/v1/segments/streams/".len()..].to_string();
+                    let mut s = st.lock().unwrap();
+                    let had = s.seg_sessions.remove(&sid).is_some();
+                    drop(s);
+                    if had {
+                        respond_bytes(req, 204, Vec::new(), "")
+                    } else {
+                        respond_json(
+                            req,
+                            404,
+                            &json!({"error": {"kind": "not_found", "message": "no such stream"}}),
+                        )
+                    }
+                }
+                (Method::Get, p) if p.starts_with("/fv/v1/segments/") => {
+                    let id = p["/fv/v1/segments/".len()..].to_string();
+                    let mut s = st.lock().unwrap();
+                    let Some(mut obj) = s.segments.get(&id).cloned() else {
+                        drop(s);
+                        respond_json(
+                            req,
+                            404,
+                            &json!({"error": {"kind": "not_found", "message": "no such segment"}}),
+                        );
+                        return;
+                    };
+                    if obj["status"] == "queued" {
+                        obj["status"] = json!("succeeded");
+                        obj["frames"] = json!(96);
+                        obj["video_url"] =
+                            json!(format!("http://127.0.0.1:{port}/files/{id}.mp4?sig=x"));
+                        s.segments.insert(id, obj.clone());
+                    }
+                    drop(s);
+                    respond_json(req, 200, &obj);
                 }
                 (Method::Get, "/fv/v1/streams") => {
                     let s = st.lock().unwrap();
@@ -592,7 +714,11 @@ impl FakeFvServe {
                     let mut s = st.lock().unwrap();
                     let Some(mut obj) = s.streams.get(&sid).cloned() else {
                         drop(s);
-                        respond_json(req, 404, &json!({"error": {"kind": "not_found", "message": "no such stream"}}));
+                        respond_json(
+                            req,
+                            404,
+                            &json!({"error": {"kind": "not_found", "message": "no such stream"}}),
+                        );
                         return;
                     };
                     match (m, action.as_deref()) {
@@ -601,7 +727,8 @@ impl FakeFvServe {
                             respond_json(req, 200, &obj);
                         }
                         (Method::Post, Some("commands")) => {
-                            let body: Value = serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
+                            let body: Value =
+                                serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
                             let t = body["type"].as_str().unwrap_or("").to_string();
                             s.commands.push((sid.clone(), body.clone()));
                             if t == "set_prompt" || t == "enqueue" {
@@ -620,7 +747,11 @@ impl FakeFvServe {
                         }
                         _ => {
                             drop(s);
-                            respond_json(req, 405, &json!({"error": {"kind": "method", "message": "no"}}));
+                            respond_json(
+                                req,
+                                405,
+                                &json!({"error": {"kind": "method", "message": "no"}}),
+                            );
                         }
                     }
                 }

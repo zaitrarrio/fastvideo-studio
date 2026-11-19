@@ -99,6 +99,13 @@ live stream").
 ## 5. Phases
 
 1. `studio-worker serve` + the Worker's backend switch and pod lifecycle +
-   warm clip jobs in the page.
+   warm clip jobs in the page. Done; validated on a pod
+   (`docs/runs/2026-11-19-runpod-6000w-pod-mode`).
 2. Live streams (clip queue / causal) with WHEP playback and steering.
-3. Segments.
+   Done on the synthetic tests; the pod validation needs the Cloudflare
+   Stream secrets (`CF_ACCOUNT_ID`, `CF_STREAM_API_TOKEN`) on the Worker,
+   which the agent sandbox cannot pass into a pod.
+3. Segments. Done on the synthetic tests (the pod side mirrors each
+   finished MP4 into the bucket under `segments/<stream>/<index>-<id>.mp4`
+   and answers a presigned URL; the fake fv-serve finishes a segment on
+   its first status read). Not yet run on a pod.

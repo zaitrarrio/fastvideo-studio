@@ -252,8 +252,26 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     let pod = Pod::start(env);
 
     // Validation before fv-serve is asked.
-    assert_eq!(pod.call("POST", "/streams", Some(json!({"model": "nope", "prompt": "a fox"})), true).0, 400);
-    assert_eq!(pod.call("POST", "/streams", Some(json!({"model": "fasth3-4step-vsa-480p-taeh3"})), true).0, 400);
+    assert_eq!(
+        pod.call(
+            "POST",
+            "/streams",
+            Some(json!({"model": "nope", "prompt": "a fox"})),
+            true
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        pod.call(
+            "POST",
+            "/streams",
+            Some(json!({"model": "fasth3-4step-vsa-480p-taeh3"})),
+            true
+        )
+        .0,
+        400
+    );
     assert_eq!(pod.call("GET", "/streams/none", None, true).0, 404);
 
     // Open: the catalog model's variant, Cloudflare by default, the WHEP URL back.
@@ -262,7 +280,13 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     let id = s["id"].as_str().unwrap().to_string();
     assert_eq!(s["mode"], "clip");
     assert_eq!(s["studio_model"], "fasth3-4step-vsa-480p-taeh3");
-    assert!(s["playback"]["whep_url"].as_str().unwrap().contains("/webRTC/play"), "{s}");
+    assert!(
+        s["playback"]["whep_url"]
+            .as_str()
+            .unwrap()
+            .contains("/webRTC/play"),
+        "{s}"
+    );
     let sent = fake.state.lock().unwrap().requests.last().cloned().unwrap();
     assert_eq!(sent["model"], "fasth3-4step-vsa-480p-taeh3");
     assert_eq!(sent["output"], json!({"kind": "cloudflare"}));
@@ -275,7 +299,16 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     let (code, l) = pod.call("GET", "/streams", None, true);
     assert_eq!(code, 200);
     assert_eq!(l["data"].as_array().unwrap().len(), 1);
-    assert_eq!(pod.call("POST", "/streams", Some(json!({"model": "sol-h3", "prompt": "x"})), true).0, 429);
+    assert_eq!(
+        pod.call(
+            "POST",
+            "/streams",
+            Some(json!({"model": "sol-h3", "prompt": "x"})),
+            true
+        )
+        .0,
+        429
+    );
 
     // A job submitted now waits for the stream.
     let (_, sub) = pod.call("POST", "/jobs", Some(json!({"op": "info"})), true);
@@ -283,10 +316,18 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     std::thread::sleep(Duration::from_millis(900));
     let (_, js) = pod.call("GET", &format!("/jobs/{jid}"), None, true);
     assert_eq!(js["status"], "IN_QUEUE", "{js}");
-    assert_eq!(js["output"]["detail"], "waiting for the live stream", "{js}");
+    assert_eq!(
+        js["output"]["detail"], "waiting for the live stream",
+        "{js}"
+    );
 
     // Steer, read, stop.
-    let (code, c) = pod.call("POST", &format!("/streams/{id}/commands"), Some(json!({"type": "set_prompt", "data": {"prompt": "the fox at dusk"}})), true);
+    let (code, c) = pod.call(
+        "POST",
+        &format!("/streams/{id}/commands"),
+        Some(json!({"type": "set_prompt", "data": {"prompt": "the fox at dusk"}})),
+        true,
+    );
     assert_eq!(code, 200, "{c}");
     assert_eq!(c["reply"]["ok"], true);
     let (code, g) = pod.call("GET", &format!("/streams/{id}"), None, true);
@@ -296,8 +337,89 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     assert_eq!(code, 204);
     let (_, h) = pod.call("GET", "/health", None, true);
     assert_eq!(h["streams"], json!([]));
-    assert_eq!(pod.call("GET", &format!("/streams/{id}"), None, true).0, 404);
+    assert_eq!(
+        pod.call("GET", &format!("/streams/{id}"), None, true).0,
+        404
+    );
     // The waiting job runs once the stream is gone.
     let done = pod.wait(&jid);
     assert_eq!(done["status"], "COMPLETED", "{done}");
+}
+
+#[test]
+fn serve_runs_segments_and_mirrors_their_mp4s_to_the_bucket() {
+    let dir = fvstudio::tempdir("serve-segments");
+    let fake = FakeFvServe::start(dir.join("fvfiles"), 2, 0.1, None);
+    let mut env = env_map(&dir);
+    env.insert("STUDIO_FV_FAKE".into(), "1".into());
+    env.insert("STUDIO_FV_PORT".into(), fake.fake.port.to_string());
+    let pod = Pod::start(env);
+
+    assert_eq!(
+        pod.call(
+            "POST",
+            "/segments",
+            Some(json!({"stream_id": "s1", "model": "sfwan21-1.3b", "prompt": "x"})),
+            true
+        )
+        .0,
+        400
+    );
+    assert_eq!(pod.call("POST", "/segments", Some(json!({"stream_id": "bad id", "segment_index": 0, "model": "sfwan21-1.3b", "prompt": "x"})), true).0, 400);
+    assert_eq!(
+        pod.call(
+            "POST",
+            "/segments",
+            Some(
+                json!({"stream_id": "s1", "segment_index": 0, "model": "h3-plug4", "prompt": "x"})
+            ),
+            true
+        )
+        .0,
+        400
+    );
+    assert_eq!(pod.call("GET", "/segments/none", None, true).0, 404);
+    assert_eq!(pod.call("GET", "/segments/streams/none", None, true).0, 404);
+
+    let (code, a) = pod.call("POST", "/segments", Some(json!({"stream_id": "s1", "segment_index": 0, "model": "sfwan21-1.3b", "prompt": "a harbour at night", "duration_sec": 6})), true);
+    assert_eq!(code, 202, "{a}");
+    let id = a["id"].as_str().unwrap().to_string();
+    assert_eq!(a["status"], "queued");
+    assert_eq!(a["studio_model"], "sfwan21-1.3b");
+    let sent = fake.state.lock().unwrap().requests.last().cloned().unwrap();
+    assert_eq!(sent["model"], "sfwan21-1.3b");
+    assert_eq!(sent["duration_sec"], 6);
+    let (_, h) = pod.call("GET", "/health", None, true);
+    assert_eq!(h["segment_streams"], json!(["s1"]));
+
+    // The first poll finds it succeeded: the MP4 is mirrored to the bucket, fv-serve's URL kept beside it.
+    let (code, g) = pod.call("GET", &format!("/segments/{id}"), None, true);
+    assert_eq!(code, 200, "{g}");
+    assert_eq!(g["status"], "succeeded");
+    let url = g["video_url"].as_str().unwrap().to_string();
+    assert!(
+        g["fv_video_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("http://127.0.0.1:"),
+        "{g}"
+    );
+    assert!(url.contains(&format!("segments/s1/0000-{id}.mp4")), "{url}");
+    assert!(g.get("mirror_error").is_none(), "{g}");
+    // A second poll answers the same mirrored URL without another upload.
+    let (_, g2) = pod.call("GET", &format!("/segments/{id}"), None, true);
+    assert_eq!(g2["video_url"], g["video_url"]);
+    // The next segment of the stream stays on the same fv-serve; the session can be read and closed.
+    let (code, b) = pod.call("POST", "/segments", Some(json!({"stream_id": "s1", "segment_index": 1, "model": "sfwan21-1.3b", "prompt": "mist rolls in", "duration_sec": 6})), true);
+    assert_eq!(code, 202, "{b}");
+    let (code, ses) = pod.call("GET", "/segments/streams/s1", None, true);
+    assert_eq!(code, 200);
+    assert_eq!(ses["segments"], 2);
+    assert_eq!(
+        pod.call("DELETE", "/segments/streams/s1", None, true).0,
+        204
+    );
+    let (_, h) = pod.call("GET", "/health", None, true);
+    assert_eq!(h["segment_streams"], json!([]));
+    assert_eq!(pod.call("GET", "/segments/streams/s1", None, true).0, 404);
 }

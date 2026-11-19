@@ -13,6 +13,8 @@
 //   DELETE /api/pod             terminate it
 //   POST /api/streams           open a live stream on the pod ({model, prompt, max_seconds?, …}) → the stream object (playback.whep_url)
 //   GET  /api/streams/:id       its state; POST /api/streams/:id/commands {type, data}; DELETE /api/streams/:id stops it
+//   POST /api/segments          the next segment of a stream ({stream_id, segment_index, model, prompt, duration_sec, …}) → 202 segment
+//   GET  /api/segments/:id      the segment (video_url once succeeded); GET / DELETE /api/segments/streams/:id its session
 //
 // A job input with `backend: "pod"` goes to the pod's /jobs instead of the
 // queue endpoint; its id is `pod_<id>` and status / cancel follow it.
@@ -72,6 +74,15 @@ async function handleApi(request, env, url) {
   const job = path.match(/^\/api\/jobs\/([A-Za-z0-9_-]+)(\/cancel)?$/);
   if (job && !job[2]) return method === "GET" ? jobStatus(job[1], env) : methodNotAllowed("GET");
   if (job) return method === "POST" ? cancelJob(job[1], env) : methodNotAllowed("POST");
+  if (path === "/api/segments") return method === "POST" ? segmentNext(request, env) : methodNotAllowed("POST");
+  const segStream = path.match(/^\/api\/segments\/streams\/([A-Za-z0-9_.-]+)$/);
+  if (segStream) {
+    if (method === "GET") return segmentStream(segStream[1], env);
+    if (method === "DELETE") return segmentStreamClose(segStream[1], env);
+    return methodNotAllowed("GET, DELETE");
+  }
+  const seg = path.match(/^\/api\/segments\/([A-Za-z0-9_.-]+)$/);
+  if (seg) return method === "GET" ? segmentStatus(seg[1], env) : methodNotAllowed("GET");
   if (path === "/api/streams") return method === "POST" ? streamOpen(request, env) : methodNotAllowed("POST");
   const stream = path.match(/^\/api\/streams\/([A-Za-z0-9_-]+)(\/commands)?$/);
   if (stream && stream[2]) return method === "POST" ? streamCommand(stream[1], request, env) : methodNotAllowed("POST");
@@ -392,6 +403,37 @@ async function streamStop(id, env) {
   const rec = await podRequired(env);
   await pod(env, rec, `/streams/${id}`, { method: "DELETE", timeoutMs: 60_000 });
   return json({ id, state: "closed" });
+}
+
+// ---- segments on the pod (docs/pod-mode.md phase 3) --------------------------
+async function segmentNext(request, env) {
+  const body = await readJson(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(400, "the body must be a JSON object");
+  if (typeof body.prompt !== "string" || !body.prompt.trim()) throw new HttpError(400, "prompt is required");
+  if (body.prompt.length > 2000) throw new HttpError(400, "prompt is over 2000 characters");
+  if (typeof body.stream_id !== "string" || !/^[A-Za-z0-9_.-]{1,64}$/.test(body.stream_id)) throw new HttpError(400, "stream_id: 1-64 of letters, digits, - _ .");
+  if (!Number.isInteger(body.segment_index) || body.segment_index < 0) throw new HttpError(400, "segment_index must be a non-negative integer");
+  if (!catalog.models.some((m) => m.engine === "fastvideo" && m.id === body.model)) throw new HttpError(400, `unknown fastvideo model ${body.model}`);
+  if (body.duration_sec != null && !(body.duration_sec >= 0.5 && body.duration_sec <= 30)) throw new HttpError(400, "duration_sec must be in [0.5, 30]");
+  const rec = await podRequired(env);
+  const r = await pod(env, rec, "/segments", { method: "POST", body, timeoutMs: 600_000 });
+  return json(r, 202);
+}
+
+async function segmentStatus(id, env) {
+  const rec = await podRequired(env);
+  return json(await pod(env, rec, `/segments/${id}`, { timeoutMs: 120_000 }));
+}
+
+async function segmentStream(id, env) {
+  const rec = await podRequired(env);
+  return json(await pod(env, rec, `/segments/streams/${id}`, { timeoutMs: 30_000 }));
+}
+
+async function segmentStreamClose(id, env) {
+  const rec = await podRequired(env);
+  await pod(env, rec, `/segments/streams/${id}`, { method: "DELETE", timeoutMs: 60_000 });
+  return json({ stream_id: id, state: "closed" });
 }
 
 // ---- uploads ---------------------------------------------------------------

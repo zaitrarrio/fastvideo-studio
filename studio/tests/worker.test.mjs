@@ -437,3 +437,44 @@ describe("live streams on the pod", () => {
     assert.deepEqual(await r.json(), { id: "fvstream_1", state: "closed" });
   });
 });
+
+describe("segments on the pod", () => {
+  const podEnvVars = { POD_IMAGE: "ghcr.io/x/studio:sha-1" };
+  const fvModel = catalog.models.find((m) => m.engine === "fastvideo").id;
+
+  test("validation before the pod; no pod is 409", async () => {
+    const e = env(podEnvVars);
+    globalThis.fetch = fakeWorld();
+    const ok = { stream_id: "str_1", segment_index: 0, model: fvModel, prompt: "a harbour", duration_sec: 6 };
+    let r = await worker.fetch(req("/api/segments", { method: "POST", body: ok }), e);
+    assert.equal(r.status, 409);
+    for (const bad of [{ ...ok, stream_id: "no spaces" }, { ...ok, segment_index: -1 }, { ...ok, model: "h3-plug4" }, { ...ok, duration_sec: 99 }, { ...ok, prompt: "" }]) {
+      r = await worker.fetch(req("/api/segments", { method: "POST", body: bad }), e);
+      assert.equal(r.status, 400, JSON.stringify(bad));
+    }
+  });
+
+  test("next, status, session and close go to the pod", async () => {
+    const e = env(podEnvVars);
+    await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));
+    const world = fakeWorld({
+      pod: {
+        "/segments/streams/str_1": (c) => c.method === "DELETE" ? new Response(null, { status: 204 }) : { stream_id: "str_1", path: "causal", segments: 1 },
+        "/segments/seg_1": { id: "seg_1", status: "succeeded", video_url: "https://r2/segments/str_1/0000-seg_1.mp4?sig" },
+        "/segments": (c) => { assert.equal(c.method, "POST"); assert.equal(c.body.segment_index, 0); return new Response(JSON.stringify({ id: "seg_1", status: "queued" }), { status: 202, headers: { "Content-Type": "application/json" } }); },
+      },
+    });
+    globalThis.fetch = world;
+    let r = await worker.fetch(req("/api/segments", { method: "POST", body: { stream_id: "str_1", segment_index: 0, model: fvModel, prompt: "a harbour", duration_sec: 6 } }), e);
+    const a = await r.json();
+    assert.equal(r.status, 202, JSON.stringify(a));
+    assert.equal(a.id, "seg_1");
+    assert.equal(world.calls.at(-1).auth, "Bearer podtok");
+    r = await worker.fetch(req("/api/segments/seg_1"), e);
+    assert.equal((await r.json()).video_url, "https://r2/segments/str_1/0000-seg_1.mp4?sig");
+    r = await worker.fetch(req("/api/segments/streams/str_1"), e);
+    assert.equal((await r.json()).path, "causal");
+    r = await worker.fetch(req("/api/segments/streams/str_1", { method: "DELETE" }), e);
+    assert.deepEqual(await r.json(), { stream_id: "str_1", state: "closed" });
+  });
+});

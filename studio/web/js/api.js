@@ -47,6 +47,9 @@ export const openStream = (body) => call("/api/streams", { method: "POST", body,
 export const getStream = (id) => call(`/api/streams/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(40_000) });
 export const streamCommand = (id, cmd) => call(`/api/streams/${encodeURIComponent(id)}/commands`, { method: "POST", body: cmd, signal: AbortSignal.timeout(70_000) });
 export const stopStream = (id) => call(`/api/streams/${encodeURIComponent(id)}`, { method: "DELETE", signal: AbortSignal.timeout(70_000) });
+export const nextSegment = (body) => call("/api/segments", { method: "POST", body, signal: AbortSignal.timeout(620_000) });
+export const getSegment = (id) => call(`/api/segments/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(130_000) });
+export const closeSegmentStream = (id) => call(`/api/segments/streams/${encodeURIComponent(id)}`, { method: "DELETE", signal: AbortSignal.timeout(70_000) });
 
 // A file into the R2 bucket: raw body with its name and type.
 export function uploadFile(file) {

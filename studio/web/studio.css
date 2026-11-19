@@ -160,3 +160,8 @@ dl.kv dt { font: 500 0.7rem/1.6 var(--f-mono); text-transform: uppercase; letter
 dl.kv dd { margin: 0; font: 0.85rem/1.45 var(--f-mono); overflow-wrap: anywhere; }
 .podbox { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 6px; }
 .podbox .controls { flex-wrap: wrap; }
+#seg-list .item { display: grid; grid-template-columns: 10px auto 1fr; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--rule); font: 0.8rem var(--f-mono); }
+#seg-list .item.current .t { color: var(--accent); font-weight: 600; }
+#seg-list .st { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+#seg-list .st.ok { background: var(--ok); } #seg-list .st.bad { background: var(--bad); } #seg-list .st.wait { background: var(--accent); }
+#seg-list .p { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

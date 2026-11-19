@@ -39,7 +39,9 @@ const S = {
   backend: api.store(BACKEND_KEY) === "pod" ? "pod" : "serverless",
   pod: null,             // the last /api/pod summary
   podTimer: 0, podBusy: false,
-  mode: api.store(MODE_KEY) === "live" ? "live" : "clip",
+  mode: ["live", "segments"].includes(api.store(MODE_KEY)) ? api.store(MODE_KEY) : "clip",
+  seg: null,             // the segment stream: {streamId, index, model, items: [...], current}
+  segTimer: 0, segBusy: false,
   stream: null,          // the live stream object being followed
   streamTimer: 0, streamBusy: false, whepPlaying: false,
   cardLimit: CARD_LIMIT, // 0 = every model of the family
@@ -89,22 +91,128 @@ function podReady() { return S.backend !== "pod" || (S.pod?.state === "running" 
 
 // ---- modes in the pod backend: clip jobs or a live stream --------------------------
 function pickMode(m) {
-  S.mode = m === "live" ? "live" : "clip";
+  S.mode = ["live", "segments"].includes(m) ? m : "clip";
   api.store(MODE_KEY, S.mode);
   renderMode();
   updateGo();
 }
 function liveMode() { return S.backend === "pod" && S.mode === "live"; }
+function segMode() { return S.backend === "pod" && S.mode === "segments"; }
 function renderMode() {
   const pod = S.backend === "pod";
+  const special = liveMode() || segMode();
   $("modes").hidden = !pod;
   $("mode-hint").hidden = !liveMode();
   for (const el of $("modes").querySelectorAll("[data-mode]")) el.setAttribute("aria-pressed", String(el.dataset.mode === S.mode));
   $("live").hidden = !liveMode();
-  $("length").closest(".field").hidden = liveMode();
-  $("adv").hidden = liveMode();
-  $("steps-hint").hidden = liveMode();
+  $("segments").hidden = !segMode();
+  $("out-h").closest("section").hidden = special;
+  $("length").closest(".field").hidden = special;
+  $("adv").hidden = special;
+  $("steps-hint").hidden = special;
   if (liveMode()) renderLive();
+  if (segMode()) renderSegments();
+}
+
+// ---- segments: one stream, a prompt per segment, played back to back -----------
+function segText() {
+  const g = S.seg;
+  if (!g) return "No stream yet. Pick a fastvideo-rs model, write the first segment's prompt and press Next segment: each one continues the last (a causal model as one rollout, a clip model chained on its last frame) and they play back to back.";
+  const done = g.items.filter((i) => i.status === "succeeded").length, pending = g.items.filter((i) => !["succeeded", "failed"].includes(i.status)).length;
+  return `Stream ${g.streamId} on ${g.model}: ${g.items.length} segment${g.items.length === 1 ? "" : "s"}, ${done} ready${pending ? `, ${pending} rendering` : ""}${g.restarted ? " · the session restarted (a cut)" : ""}.`;
+}
+function renderSegments() {
+  const g = S.seg;
+  $("seg-text").textContent = segText();
+  $("seg-summary").textContent = g?.items.at(-1)?.load_s ? `fv-serve up in ${fmt(g.items.at(-1).load_s)}` : "";
+  $("seg-next").disabled = S.segBusy || !podReady() || !(g ? true : liveModelOk());
+  $("seg-next").textContent = S.segBusy ? "Asking…" : g ? `Next segment (#${g.index})` : "First segment";
+  $("seg-close").disabled = !g || S.segBusy;
+  $("seg-list").innerHTML = (g?.items || []).map((it) => `<div class="item${it.id === g.current ? " current" : ""}" data-seg="${esc(it.id)}"><span class="st ${it.status === "succeeded" ? "ok" : it.status === "failed" ? "bad" : "wait"}"></span><span class="t">#${it.index} · ${esc(it.status)}${it.duration_sec ? ` · ${fmt(it.duration_sec)}` : ""}${it.reset ? " · cut" : ""}</span><span class="p">${esc(it.prompt.slice(0, 80))}</span></div>`).join("");
+}
+function showSegError(m) { $("seg-err").textContent = m || ""; $("seg-err").hidden = !m; }
+async function nextSegment() {
+  if (S.segBusy || !podReady()) return;
+  const prompt = $("prompt").value.trim();
+  if (!prompt) { showSegError("Write the segment's prompt first."); $("prompt").focus(); return; }
+  if (!S.seg && !liveModelOk()) { showSegError("Pick a fastvideo-rs model first."); return; }
+  showSegError("");
+  if (!S.seg) S.seg = { streamId: `str_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`, index: 0, model: S.model.id, items: [], current: null, restarted: false };
+  const g = S.seg;
+  const body = { stream_id: g.streamId, segment_index: g.index, model: g.model, prompt, duration_sec: Number($("seg-seconds").value) || 6 };
+  if ($("seg-reset").value === "1") { body.reset = true; $("seg-reset").value = ""; }
+  const seed = Number($("seed").value); if (Number.isFinite(seed) && $("seed").value !== "") body.seed = seed;
+  if (S.size && g.index === 0) { body.resolution = `${Math.min(S.size[0], S.size[1])}p`; body.aspect_ratio = aspectOf(S.size[0], S.size[1]); }
+  S.segBusy = true; renderSegments(); updateGo();
+  try {
+    const r = await api.nextSegment(body);
+    g.index += 1;
+    g.items.push({ id: r.id, index: body.segment_index, status: r.status || "queued", prompt, reset: !!body.reset, load_s: r.load_s, video_url: null, duration_sec: r.planned_duration_sec || null });
+    scheduleSegPoll(200);
+  } catch (e) {
+    if (e instanceof api.AuthError) lock("The studio token was refused."); else showSegError(e.message);
+  }
+  S.segBusy = false; renderSegments(); updateGo();
+}
+function scheduleSegPoll(ms) { clearTimeout(S.segTimer); S.segTimer = setTimeout(pollSegments, ms); }
+async function pollSegments() {
+  const g = S.seg; if (!g) return;
+  const pending = g.items.filter((i) => !["succeeded", "failed"].includes(i.status));
+  for (const it of pending) {
+    try {
+      const r = await api.getSegment(it.id);
+      it.status = r.status || it.status;
+      if (r.video_url) it.video_url = r.video_url;
+      if (r.duration_sec) it.duration_sec = r.duration_sec;
+      if (r.session?.restarted) g.restarted = true;
+      if (r.status === "failed") it.error = r.error || "failed";
+      if (r.mirror_error) it.error = r.mirror_error;
+    } catch (e) {
+      if (e instanceof api.AuthError) { lock("The studio token was refused."); return; }
+      showSegError(`Segment ${it.index}: ${e.message}`);
+    }
+  }
+  renderSegments();
+  playNextSegment();
+  if (g.items.some((i) => !["succeeded", "failed"].includes(i.status))) scheduleSegPoll(POLL_MS);
+}
+// Two <video> elements: the one playing stays on screen while the next ready
+// segment is loaded into the other; on `ended` they swap.
+function segVideos() { const a = $("seg-video-a"), b = $("seg-video-b"); return a.hidden ? [b, a] : [a, b]; }
+function playNextSegment() {
+  const g = S.seg; if (!g) return;
+  const [shown, other] = segVideos();
+  const ready = g.items.filter((i) => i.status === "succeeded" && i.video_url);
+  if (!g.current) {
+    const first = ready[0]; if (!first) return;
+    g.current = first.id; shown.src = first.video_url; shown.hidden = false; other.hidden = true; shown.play?.().catch(() => {});
+    renderSegments(); return;
+  }
+  const at = ready.findIndex((i) => i.id === g.current);
+  const next = at >= 0 ? ready[at + 1] : null;
+  if (next && other.dataset.seg !== next.id) { other.src = next.video_url; other.dataset.seg = next.id; other.preload = "auto"; other.load?.(); }
+  if (next && g.waiting && shown.ended) { g.waiting = false; onSegmentEnded({ target: shown }); }
+}
+function onSegmentEnded(ev) {
+  const g = S.seg; if (!g) return;
+  const [shown, other] = segVideos();
+  if (ev.target !== shown) return;
+  const ready = g.items.filter((i) => i.status === "succeeded" && i.video_url);
+  const at = ready.findIndex((i) => i.id === g.current);
+  const next = at >= 0 ? ready[at + 1] : null;
+  if (!next) { g.waiting = true; return; }
+  if (other.dataset.seg !== next.id) { other.src = next.video_url; other.dataset.seg = next.id; }
+  g.current = next.id; other.hidden = false; shown.hidden = true; other.play?.().catch(() => {});
+  renderSegments();
+  playNextSegment();
+}
+async function closeSegments() {
+  const g = S.seg; if (!g || S.segBusy) return;
+  S.segBusy = true; renderSegments();
+  try { await api.closeSegmentStream(g.streamId); } catch (e) { if (e instanceof api.AuthError) lock("The studio token was refused."); else showSegError(e.message); }
+  clearTimeout(S.segTimer);
+  for (const v of [$("seg-video-a"), $("seg-video-b")]) { v.pause?.(); v.removeAttribute("src"); delete v.dataset.seg; }
+  S.seg = null; S.segBusy = false; renderSegments(); updateGo();
 }
 function liveModelOk() { return !!S.model && S.model.engine === "fastvideo"; }
 function renderLive() {
@@ -303,6 +411,12 @@ function refreshForm() {
 }
 
 function updateGo() {
+  if (segMode()) {
+    const ok = !S.locked && !S.segBusy && podReady() && (S.seg ? true : liveModelOk());
+    $("go").disabled = !ok;
+    $("go").textContent = S.segBusy ? "Asking…" : !podReady() ? "Start the pod first" : !S.seg && !liveModelOk() ? "Pick a fastvideo-rs model" : S.seg ? `Next segment (#${S.seg.index})` : "First segment";
+    return;
+  }
   if (liveMode()) {
     const live = !!S.stream && !isLiveTerminal(S.stream);
     const ok = liveModelOk() && !S.locked && !S.streamBusy && podReady() && !live;
@@ -431,6 +545,7 @@ function wireMedia(req) {
 async function generate(e) {
   e?.preventDefault();
   if (liveMode()) return startStream();
+  if (segMode()) return nextSegment();
   if (!S.model || S.locked || S.busy) return;
   showError("");
   const st = currentState();
@@ -633,6 +748,12 @@ $("live-pause").onclick = () => liveCommand("pause");
 $("live-resume").onclick = () => liveCommand("resume");
 $("live-reset").onclick = () => liveCommand("reset");
 $("live-stop").onclick = stopLive;
+$("seg-next").onclick = nextSegment;
+$("seg-close").onclick = closeSegments;
+$("seg-video-a").addEventListener("ended", onSegmentEnded);
+$("seg-video-b").addEventListener("ended", onSegmentEnded);
+$("seg-video-a").addEventListener("loadeddata", () => { if (S.seg?.waiting) { S.seg.waiting = false; playNextSegment(); } });
+$("seg-video-b").addEventListener("loadeddata", () => { if (S.seg?.waiting) { S.seg.waiting = false; playNextSegment(); } });
 $("pod-start").onclick = startPod;
 $("pod-stop").onclick = stopPod;
 $("pod-refresh").onclick = refreshPod;

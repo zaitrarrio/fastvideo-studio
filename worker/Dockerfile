@@ -35,8 +35,8 @@ ARG H3_REPO=https://github.com/zaitrarrio/h3-rs.git
 ARG FASTWAN_REPO=https://github.com/zaitrarrio/fastwan-rs.git
 # Pinned commits of branch claude/wizardly-clarke-1a2jta: the `cuda-13` feature
 # (h3-rs PR #6, fastwan-rs PR #7) on top of serve's per-request inputs.
-ARG H3_REF=8d4be0702587bcb258e686969df1fb2b099d1a9f
-ARG FASTWAN_REF=240dbf994b8c633857f606ace64a0794c06454e3
+ARG H3_REF=4a7d38262dd8110356d287c8d42186b0e19cf5b0
+ARG FASTWAN_REF=d746a76ca14766b4b23d1fd17400802efe6408fa
 WORKDIR /src
 RUN --mount=type=secret,id=repo_token,required=false \
     set -eu; \

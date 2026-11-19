@@ -10,8 +10,9 @@
 #            (fv-serve's SDPA) and its ffmpeg / ffprobe (dynamically linked
 #            against Ubuntu 22.04's libx264 / libvpx / libdav1d / libssl).
 #   final    ubuntu:22.04 + python3 (the handler is stdlib-only, no venv) + the
-#            four codec libraries + the files above. Not copied: fv-boot, the
-#            llama-server prompt upsampler (never started here), perl, apt lists.
+#            four codec libraries + the files above, and llama-server (llama.cpp,
+#            CUDA 13, +82 MB) for prompt expansion with Qwen3-VL-4B-Instruct
+#            fetched from R2 on first use. Not copied: fv-boot, perl, apt lists.
 #
 #   docker build -f worker/Dockerfile --build-arg H3_REF=<sha> --build-arg FASTWAN_REF=<sha> -t fastvideo-studio-worker .
 
@@ -24,8 +25,8 @@ ARG H3_REPO=https://github.com/zaitrarrio/h3-rs.git
 ARG FASTWAN_REPO=https://github.com/zaitrarrio/fastwan-rs.git
 # Pinned commits of branch claude/wizardly-clarke-1a2jta: the `cuda-13` feature
 # (h3-rs PR #6, fastwan-rs PR #7) on top of serve's per-request inputs.
-ARG H3_REF=9c61047af80b284bbed745b380bb82f7583207d6
-ARG FASTWAN_REF=22c0d237fee7edb3480d703ab4a3609befdb9a7f
+ARG H3_REF=8d4be0702587bcb258e686969df1fb2b099d1a9f
+ARG FASTWAN_REF=240dbf994b8c633857f606ace64a0794c06454e3
 RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config libssl-dev clang \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
@@ -62,10 +63,10 @@ RUN apt-get update \
 # serve image; libcuda comes from the host driver at run time (R580+).
 COPY --from=fv /usr/local/cuda-13.4/lib64/ /usr/local/cuda-13.4/lib64/
 COPY --from=fv /usr/lib/x86_64-linux-gnu/libcudnn*.so* /usr/lib/x86_64-linux-gnu/
-COPY --from=fv /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/fv-serve
+COPY --from=fv /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/llama-server /opt/fastvideo-rs/bin/llama-server.version /opt/fastvideo-rs/bin/
 COPY --from=fv /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 RUN echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/cuda.conf && ldconfig \
- && for f in /opt/fastvideo-rs/bin/fv-serve /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
+ && for f in /opt/fastvideo-rs/bin/fv-serve /opt/fastvideo-rs/bin/llama-server /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
              /usr/local/cuda-13.4/lib64/libcublasLt.so.13 /usr/local/cuda-13.4/lib64/libcublas.so.13 \
              /usr/local/cuda-13.4/lib64/libnvrtc.so.13 /usr/lib/x86_64-linux-gnu/libcudnn.so.9; do \
       if ldd "$f" | grep 'not found' | grep -v libcuda.so; then echo "unresolved: $f"; exit 1; fi; done \
@@ -87,6 +88,7 @@ ENV STUDIO_IMAGE=${STUDIO_IMAGE} \
     STUDIO_BIN_DIR=/opt/studio/bin \
     STUDIO_FV_SERVE=/opt/fastvideo-rs/bin/fv-serve \
     STUDIO_FV_CONFIG=/opt/studio/configs/fastvideo.toml \
+    STUDIO_LLAMA_SERVER=/opt/fastvideo-rs/bin/llama-server \
     STUDIO_CUDA12_LIB= \
     PYTHONUNBUFFERED=1 \
     NVIDIA_VISIBLE_DEVICES=all \

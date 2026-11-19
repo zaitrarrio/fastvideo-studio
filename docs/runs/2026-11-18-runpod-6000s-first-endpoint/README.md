@@ -156,3 +156,23 @@ So the third failing case of `sha-ca445df` was the small `vsa (5, 6, 9) h2
 d128` one, as guessed, and both engines' conformance suites are green on
 CUDA 13.4 with NVRTC-compiled SASS on both Blackwell editions. This is the
 image the endpoint runs.
+
+## 2026-11-19 13:35 UTC: one fv-serve per process group (image `sha-db8ffb0`)
+
+Two fastvideo-engine jobs of different H3 models submitted 3 s apart, so
+the second queued behind the first on the same worker (RTX PRO 6000 Server
+Edition):
+
+| job | stage | load (`load_s`) | denoise | `total_s` | execution | queue delay |
+|---|---|---|---|---|---|---|
+| `fasth3-4step-vsa-480p-taeh3` T2V 832×480×124, seed 7 | 0.02 s | 159.7 s (fv-serve started for the `h3` group with this model resident) | 41.4 s (fv-serve's metric: 4 steps + TAEH3) | 203.9 s | 205.5 s | 177 s (cold worker) |
+| `sol-h3`, same prompt and seed | 0.02 s | **0** (the group's fv-serve kept) | 38.9 s | 151.3 s | 152.7 s | 380 s (behind job 1) |
+
+Before this change the second job restarted fv-serve and paid its load
+again. Now the process stays and fv-serve loads `sol-h3` on demand inside
+it (`[engine] swap = true`): that on-demand load is the ~110 s between the
+second job's `denoise_s` and its `total_s`, which the worker's timings do
+not name (fv-serve reports `load_s` only for the process start). The saving
+against a restart is the process start and the model's `resident` load
+path, about 50 s here; the real win is in the pod mode, where the group's
+models stay loaded across jobs (`docs/runs/2026-11-19-runpod-6000w-pod-mode`).

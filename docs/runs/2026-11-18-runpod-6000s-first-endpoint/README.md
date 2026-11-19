@@ -142,7 +142,17 @@ sidecar start are paid once per worker; on a warm worker the rewrite is the
 only extra cost (not yet measured separately: the worker's `load_s` folds the
 sidecar start and the rewrite into the h3 load).
 
-### Next image
+## 2026-11-19 05:40 UTC: image `sha-f52591f` (fastwan at `b50c842`, the check-input fix)
 
-`FASTWAN_REF` moves to fastwan-rs `b50c842` (the check-input fix for the
-three VSA cases) so `op: check` reads 66 / 66 there.
+Same image otherwise (1.09 GB compressed). Worker this time: RTX PRO 6000
+Blackwell **Workstation** Edition, driver 595.112.07.
+
+| engine | result | time |
+|---|---|---|
+| `fastwan check --backend cuda` | **all 66 checks pass** (tolerance 3e-2): the three VSA cases now at rel 2.4e-3 / 2.9e-3 / 2.8e-3 | 34.5 s |
+| `h3 check --backend cuda` | **all 180 checks pass** | 16.0 s |
+
+So the third failing case of `sha-ca445df` was the small `vsa (5, 6, 9) h2
+d128` one, as guessed, and both engines' conformance suites are green on
+CUDA 13.4 with NVRTC-compiled SASS on both Blackwell editions. This is the
+image the endpoint runs.

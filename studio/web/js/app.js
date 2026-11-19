@@ -6,11 +6,14 @@ import { families, familyById, modelById, defaultModel, taskLabel, taskSpec, kno
 import { knobDefaults, buildRequest, CARD_LIMIT, cliLine, hintFor, missingInputs, readKnob, renderFamilies, renderModels, renderTasks, renderSizes, renderLengths, renderKnobs, updateKnobVisibility, renderInputs, isUpscaleKnob } from "./form.js";
 import { renderStages, summaryText, showClip, aspectOf, isTerminal, noteStage, fmt } from "./player.js";
 import { loadSession, saveSession, addHistory, updateHistory, findItem, isExpired, playableClips, renderHistory } from "./session.js";
+import { playWhep, stopPlayer, liveText, isLiveTerminal, commandFor } from "./live.js";
 
 const $ = (id) => document.getElementById(id);
 const FORM_KEY = "studio.form";
 const INFO_KEY = "studio.info";
 const BACKEND_KEY = "studio.backend";
+const MODE_KEY = "studio.mode";
+const LIVE_MS = 2000;
 const POD_MS = 10000;
 const POLL_MS = 2000;
 const HEALTH_MS = 15000;
@@ -36,6 +39,9 @@ const S = {
   backend: api.store(BACKEND_KEY) === "pod" ? "pod" : "serverless",
   pod: null,             // the last /api/pod summary
   podTimer: 0, podBusy: false,
+  mode: api.store(MODE_KEY) === "live" ? "live" : "clip",
+  stream: null,          // the live stream object being followed
+  streamTimer: 0, streamBusy: false, whepPlaying: false,
   cardLimit: CARD_LIMIT, // 0 = every model of the family
 };
 
@@ -76,9 +82,107 @@ function pickBackend(b) {
   for (const el of $("backends").querySelectorAll("[data-backend]")) el.setAttribute("aria-pressed", String(el.dataset.backend === S.backend));
   $("podbox").hidden = S.backend !== "pod";
   if (S.backend === "pod") refreshPod(); else clearTimeout(S.podTimer);
+  renderMode();
   updateGo(); if (!S.locked) refreshHealth();
 }
 function podReady() { return S.backend !== "pod" || (S.pod?.state === "running" && !!S.pod?.ready); }
+
+// ---- modes in the pod backend: clip jobs or a live stream --------------------------
+function pickMode(m) {
+  S.mode = m === "live" ? "live" : "clip";
+  api.store(MODE_KEY, S.mode);
+  renderMode();
+  updateGo();
+}
+function liveMode() { return S.backend === "pod" && S.mode === "live"; }
+function renderMode() {
+  const pod = S.backend === "pod";
+  $("modes").hidden = !pod;
+  $("mode-hint").hidden = !liveMode();
+  for (const el of $("modes").querySelectorAll("[data-mode]")) el.setAttribute("aria-pressed", String(el.dataset.mode === S.mode));
+  $("live").hidden = !liveMode();
+  $("length").closest(".field").hidden = liveMode();
+  $("adv").hidden = liveMode();
+  $("steps-hint").hidden = liveMode();
+  if (liveMode()) renderLive();
+}
+function liveModelOk() { return !!S.model && S.model.engine === "fastvideo"; }
+function renderLive() {
+  const s = S.stream;
+  const live = !!s && !isLiveTerminal(s);
+  $("live-text").textContent = s ? liveText(s) : "No stream. Pick a fastvideo-rs model, write the opening prompt and press Start stream.";
+  $("live-summary").textContent = s ? `${s.studio_model || s.model || ""}${s.load_s ? ` · fv-serve up in ${fmt(s.load_s)}` : ""}` : "";
+  const clip = s?.mode === "clip";
+  $("steer-label").textContent = clip ? "Next clip prompt (queued behind the clips already generating)" : "New prompt (applied at the next block boundary)";
+  $("steer-seconds-row").hidden = !clip;
+  $("live-steer").textContent = clip ? "Enqueue clip" : "Switch prompt";
+  $("live-pause").textContent = clip ? "Pause (autoplay off)" : "Pause";
+  $("live-resume").textContent = clip ? "Resume (autoplay on)" : "Resume";
+  for (const id of ["live-steer", "live-pause", "live-resume", "live-reset", "live-stop"]) $(id).disabled = !live || S.streamBusy;
+}
+function showLiveError(m) { $("live-err").textContent = m || ""; $("live-err").hidden = !m; }
+async function startStream() {
+  if (S.streamBusy || !podReady() || !liveModelOk()) return;
+  const prompt = $("prompt").value.trim();
+  if (!prompt) { showError("Write the opening prompt first."); $("prompt").focus(); return; }
+  showError(""); showLiveError("");
+  S.streamBusy = true; updateGo();
+  const body = { model: S.model.id, prompt };
+  const seed = Number($("seed").value); if (Number.isFinite(seed) && $("seed").value !== "") body.seed = seed;
+  if (S.size) body.resolution = `${Math.min(S.size[0], S.size[1])}p`;
+  if (S.size) body.aspect_ratio = aspectOf(S.size[0], S.size[1]);
+  try {
+    S.stream = await api.openStream(body);
+    S.whepPlaying = false;
+    $("steer").value = "";
+    followStream();
+  } catch (e) {
+    if (e instanceof api.AuthError) lock("The studio token was refused.");
+    else showError(e.message);
+  }
+  S.streamBusy = false; updateGo(); renderLive();
+}
+function followStream() {
+  clearTimeout(S.streamTimer);
+  pollStream();
+}
+async function pollStream() {
+  const id = S.stream?.id; if (!id) return;
+  try { S.stream = await api.getStream(id); }
+  catch (e) {
+    if (e instanceof api.AuthError) { lock("The studio token was refused."); return; }
+    if (e.status === 404) { S.stream = { ...S.stream, status: { ...(S.stream.status || {}), state: "closed" } }; }
+    else showLiveError(`Stream status: ${e.message}`);
+  }
+  renderLive();
+  const s = S.stream;
+  const whep = s?.playback?.whep_url;
+  if (!S.whepPlaying && whep && s?.status?.output_state === "publishing") {
+    S.whepPlaying = true;
+    try { await playWhep($("live-video"), whep); showLiveError(""); }
+    catch (e) { S.whepPlaying = false; showLiveError(`WHEP playback: ${e.message}`); }
+  }
+  if (isLiveTerminal(s)) { await stopPlayer($("live-video")); S.whepPlaying = false; renderLive(); updateGo(); return; }
+  S.streamTimer = setTimeout(pollStream, LIVE_MS);
+}
+async function liveCommand(action) {
+  const s = S.stream; if (!s || S.streamBusy) return;
+  const data = { prompt: $("steer").value.trim(), seconds: Number($("steer-seconds").value) };
+  if (action === "steer" && !data.prompt) { showLiveError("Write the next prompt first."); return; }
+  S.streamBusy = true; renderLive();
+  try { const r = await api.streamCommand(s.id, commandFor(s.mode, action, data)); showLiveError(""); $("live-text").textContent = `${action}: ${JSON.stringify(r.reply ?? r).slice(0, 160)}`; }
+  catch (e) { if (e instanceof api.AuthError) lock("The studio token was refused."); else showLiveError(e.message); }
+  S.streamBusy = false; renderLive();
+}
+async function stopLive() {
+  const s = S.stream; if (!s || S.streamBusy) return;
+  S.streamBusy = true; renderLive();
+  try { await api.stopStream(s.id); } catch (e) { if (e instanceof api.AuthError) lock("The studio token was refused."); else showLiveError(e.message); }
+  clearTimeout(S.streamTimer);
+  await stopPlayer($("live-video")); S.whepPlaying = false;
+  S.stream = { ...s, status: { ...(s.status || {}), state: "closed", output_state: "ended" } };
+  S.streamBusy = false; renderLive(); updateGo();
+}
 function podLive(p) { return !!p?.state && !["none", "gone", "terminated"].includes(p.state); }
 function renderPod(p) {
   S.pod = p;
@@ -199,6 +303,13 @@ function refreshForm() {
 }
 
 function updateGo() {
+  if (liveMode()) {
+    const live = !!S.stream && !isLiveTerminal(S.stream);
+    const ok = liveModelOk() && !S.locked && !S.streamBusy && podReady() && !live;
+    $("go").disabled = !ok;
+    $("go").textContent = S.streamBusy ? "Starting…" : live ? "Stream running" : !podReady() ? "Start the pod first" : !liveModelOk() ? "Pick a fastvideo-rs model" : "Start stream";
+    return;
+  }
   const ok = !!S.model && !S.locked && !S.busy && podReady();
   $("go").disabled = !ok;
   $("go").textContent = S.busy ? "Submitting…" : S.backend === "pod" ? (podReady() ? "Generate clip on the pod" : "Start the pod first") : "Generate clip";
@@ -319,6 +430,7 @@ function wireMedia(req) {
 // ---- generation -------------------------------------------------------------------------
 async function generate(e) {
   e?.preventDefault();
+  if (liveMode()) return startStream();
   if (!S.model || S.locked || S.busy) return;
   showError("");
   const st = currentState();
@@ -509,11 +621,18 @@ async function boot() {
   renderStages($("stages"), null);
   for (const el of $("backends").querySelectorAll("[data-backend]")) el.setAttribute("aria-pressed", String(el.dataset.backend === S.backend));
   $("podbox").hidden = S.backend !== "pod";
+  renderMode();
   if (S.locked) lock(); else { setEngine("wait", "Checking the endpoint…"); refreshHealth(); resumePolling(); if (S.backend === "pod") refreshPod(); }
   if (S.items[0]) openItem(S.items[0].id);
 }
 
 $("backends").onclick = (e) => { const b = e.target.closest("[data-backend]")?.dataset.backend; if (b && b !== S.backend) pickBackend(b); };
+$("modes").onclick = (e) => { const m = e.target.closest("[data-mode]")?.dataset.mode; if (m && m !== S.mode) pickMode(m); };
+$("live-steer").onclick = () => liveCommand("steer");
+$("live-pause").onclick = () => liveCommand("pause");
+$("live-resume").onclick = () => liveCommand("resume");
+$("live-reset").onclick = () => liveCommand("reset");
+$("live-stop").onclick = stopLive;
 $("pod-start").onclick = startPod;
 $("pod-stop").onclick = stopPod;
 $("pod-refresh").onclick = refreshPod;

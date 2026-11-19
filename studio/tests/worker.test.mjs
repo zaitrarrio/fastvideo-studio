@@ -394,3 +394,46 @@ describe("pod backend", () => {
     assert.deepEqual(await r.json(), { id: "q1", status: "IN_QUEUE", backend: "serverless" });
   });
 });
+
+describe("live streams on the pod", () => {
+  const podEnvVars = { POD_IMAGE: "ghcr.io/x/studio:sha-1" };
+  const fvModel = catalog.models.find((m) => m.engine === "fastvideo").id;
+
+  test("no pod: 409; bad bodies: 400 before the pod is asked", async () => {
+    const e = env(podEnvVars);
+    globalThis.fetch = fakeWorld();
+    let r = await worker.fetch(req("/api/streams", { method: "POST", body: { model: fvModel, prompt: "a fox" } }), e);
+    assert.equal(r.status, 409);
+    r = await worker.fetch(req("/api/streams", { method: "POST", body: { model: "h3-plug4", prompt: "a fox" } }), e);
+    assert.equal(r.status, 400);
+    r = await worker.fetch(req("/api/streams", { method: "POST", body: { model: fvModel } }), e);
+    assert.equal(r.status, 400);
+    r = await worker.fetch(req("/api/streams/s1/commands", { method: "POST", body: { nope: 1 } }), e);
+    assert.equal(r.status, 400);
+  });
+
+  test("open, status, command and stop go to the pod with its token", async () => {
+    const e = env(podEnvVars);
+    await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));
+    const obj = { id: "fvstream_1", mode: "clip", status: { state: "running", output_state: "publishing" }, playback: { whep_url: "https://cf/whep" } };
+    const world = fakeWorld({
+      pod: {
+        "/streams/fvstream_1/commands": (c) => { assert.equal(c.body.type, "set_prompt"); return { reply: { ok: true } }; },
+        "/streams/fvstream_1": (c) => c.method === "DELETE" ? new Response(null, { status: 204 }) : obj,
+        "/streams": (c) => { assert.equal(c.method, "POST"); assert.equal(c.body.model, fvModel); assert.equal(c.body.max_seconds, 60); return new Response(JSON.stringify(obj), { status: 201, headers: { "Content-Type": "application/json" } }); },
+      },
+    });
+    globalThis.fetch = world;
+    let r = await worker.fetch(req("/api/streams", { method: "POST", body: { model: fvModel, prompt: "a fox", max_seconds: 60 } }), e);
+    const opened = await r.json();
+    assert.equal(r.status, 201, JSON.stringify(opened));
+    assert.equal(opened.playback.whep_url, "https://cf/whep");
+    assert.equal(world.calls.at(-1).auth, "Bearer podtok");
+    r = await worker.fetch(req("/api/streams/fvstream_1"), e);
+    assert.equal((await r.json()).status.state, "running");
+    r = await worker.fetch(req("/api/streams/fvstream_1/commands", { method: "POST", body: { type: "set_prompt", data: { prompt: "dusk" } } }), e);
+    assert.equal((await r.json()).reply.ok, true);
+    r = await worker.fetch(req("/api/streams/fvstream_1", { method: "DELETE" }), e);
+    assert.deepEqual(await r.json(), { id: "fvstream_1", state: "closed" });
+  });
+});

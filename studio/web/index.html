@@ -42,6 +42,12 @@
         </div>
       </div>
 
+      <div class="modes" id="modes" role="group" aria-label="Mode" hidden>
+        <button type="button" data-mode="clip" aria-pressed="true">Clip</button>
+        <button type="button" data-mode="live" aria-pressed="false">Live stream</button>
+      </div>
+      <p class="hint" id="mode-hint" hidden>Live streams run the fastvideo-rs models: a clip model (H3, LTX, Wan) as a clip queue, a causal one (SF-Wan, LongLive) as one continuous rollout, published to Cloudflare Stream and played here over WHEP.</p>
+
       <h2>Model</h2>
       <div class="modes" id="families" role="group" aria-label="Model family"></div>
       <div class="cards" id="models" role="group" aria-label="Model"></div>
@@ -101,6 +107,27 @@
           <div class="controls"><span class="label">What the worker ran</span><button type="button" class="ghost small" id="job-copy">Copy</button></div>
           <pre class="cmd" id="job-cmd"></pre>
         </div>
+      </section>
+
+      <section class="panel" id="live" aria-labelledby="live-h" hidden>
+        <div class="controls"><h2 id="live-h" style="flex:1">Live</h2><span class="summary" id="live-summary" aria-live="polite"></span></div>
+        <div class="screen">
+          <video id="live-video" autoplay playsinline muted controls></video>
+        </div>
+        <p class="hint" id="live-text" aria-live="polite">No stream.</p>
+        <label class="field"><span class="label" id="steer-label">Next prompt</span>
+          <textarea id="steer" maxlength="2000" style="min-height:64px" placeholder="Where the stream goes next"></textarea></label>
+        <div class="row" id="steer-seconds-row" hidden>
+          <label class="field"><span class="label">Clip length (seconds; blank: the session's default)</span><input id="steer-seconds" type="number" step="0.5" min="1" placeholder="e.g. 5"></label>
+        </div>
+        <div class="controls">
+          <button type="button" class="ghost small" id="live-steer" disabled>Switch prompt</button>
+          <button type="button" class="ghost small" id="live-pause" disabled>Pause</button>
+          <button type="button" class="ghost small" id="live-resume" disabled>Resume</button>
+          <button type="button" class="ghost small" id="live-reset" disabled>Reset (scene cut)</button>
+          <button type="button" class="ghost small" id="live-stop" disabled>Stop</button>
+        </div>
+        <p class="msg bad" id="live-err" hidden></p>
       </section>
 
       <section class="panel" aria-labelledby="hist-h">

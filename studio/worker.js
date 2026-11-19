@@ -11,6 +11,8 @@
 //   GET  /api/pod               the pod backend (docs/pod-mode.md): its record, RunPod state, health
 //   POST /api/pod               create the pod (RunPod REST v2 POST /v2/pods, the worker image in `serve` mode)
 //   DELETE /api/pod             terminate it
+//   POST /api/streams           open a live stream on the pod ({model, prompt, max_seconds?, …}) → the stream object (playback.whep_url)
+//   GET  /api/streams/:id       its state; POST /api/streams/:id/commands {type, data}; DELETE /api/streams/:id stops it
 //
 // A job input with `backend: "pod"` goes to the pod's /jobs instead of the
 // queue endpoint; its id is `pod_<id>` and status / cancel follow it.
@@ -70,6 +72,14 @@ async function handleApi(request, env, url) {
   const job = path.match(/^\/api\/jobs\/([A-Za-z0-9_-]+)(\/cancel)?$/);
   if (job && !job[2]) return method === "GET" ? jobStatus(job[1], env) : methodNotAllowed("GET");
   if (job) return method === "POST" ? cancelJob(job[1], env) : methodNotAllowed("POST");
+  if (path === "/api/streams") return method === "POST" ? streamOpen(request, env) : methodNotAllowed("POST");
+  const stream = path.match(/^\/api\/streams\/([A-Za-z0-9_-]+)(\/commands)?$/);
+  if (stream && stream[2]) return method === "POST" ? streamCommand(stream[1], request, env) : methodNotAllowed("POST");
+  if (stream) {
+    if (method === "GET") return streamStatus(stream[1], env);
+    if (method === "DELETE") return streamStop(stream[1], env);
+    return methodNotAllowed("GET, DELETE");
+  }
   throw new HttpError(404, "no such route");
 }
 
@@ -346,6 +356,42 @@ export function normaliseStatus(id, r) {
   if (r.executionTime != null) out.executionTime = r.executionTime;
   if (r.workerId) out.workerId = r.workerId;
   return out;
+}
+
+// ---- live streams on the pod (docs/pod-mode.md phase 2) ----------------------
+async function podRequired(env) {
+  const rec = await podRecord(env);
+  if (!rec) throw new HttpError(409, "no pod is running: start one first (POST /api/pod)");
+  return rec;
+}
+
+async function streamOpen(request, env) {
+  const body = await readJson(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(400, "the body must be a JSON object");
+  if (typeof body.prompt !== "string" || !body.prompt.trim()) throw new HttpError(400, "prompt is required");
+  if (body.prompt.length > 2000) throw new HttpError(400, "prompt is over 2000 characters");
+  if (!catalog.models.some((m) => m.engine === "fastvideo" && m.id === body.model)) throw new HttpError(400, `unknown fastvideo model ${body.model}`);
+  const rec = await podRequired(env);
+  const r = await pod(env, rec, "/streams", { method: "POST", body, timeoutMs: 600_000 });
+  return json(r, 201);
+}
+
+async function streamStatus(id, env) {
+  const rec = await podRequired(env);
+  return json(await pod(env, rec, `/streams/${id}`, { timeoutMs: 30_000 }));
+}
+
+async function streamCommand(id, request, env) {
+  const body = await readJson(request);
+  if (!body || typeof body.type !== "string") throw new HttpError(400, "a command is {type, data?}");
+  const rec = await podRequired(env);
+  return json(await pod(env, rec, `/streams/${id}/commands`, { method: "POST", body, timeoutMs: 60_000 }));
+}
+
+async function streamStop(id, env) {
+  const rec = await podRequired(env);
+  await pod(env, rec, `/streams/${id}`, { method: "DELETE", timeoutMs: 60_000 });
+  return json({ id, state: "closed" });
 }
 
 // ---- uploads ---------------------------------------------------------------

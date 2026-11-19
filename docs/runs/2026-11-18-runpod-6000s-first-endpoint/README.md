@@ -66,3 +66,48 @@ by fv-serve's metrics (its 4 steps + TAEH3 decode; the worker reports
 fv-serve's numbers, `decode_s` 0), execution 195.6 s, cold worker start
 170 s. With that, every engine of the catalog has produced a clip through
 the endpoint.
+
+## 2026-11-19 05:10 UTC: image `sha-ca445df` (Rust worker, one CUDA 13 runtime, SASS kernels)
+
+The image is 1.09 GB compressed (15 layers, ghcr manifest): ubuntu:22.04,
+the CUDA 13.4 libraries + cuDNN, fv-serve, llama-server, Ubuntu's ffmpeg,
+`h3 @ 697fb9a` and `fastwan @ fa6a318` built with `--features cuda-13` and
+loading their kernels as NVRTC-compiled SASS, `studio-worker` (Rust) as the
+entrypoint, no Python. Worker: RTX PRO 6000 Blackwell **Server** Edition,
+driver 595.112.07, compute capability 12.0, pod `f3q4rq4bbi50zx`.
+
+### `op: check` (the engines' conformance checkers on the card)
+
+| engine | result | time |
+|---|---|---|
+| `h3 check --backend cuda` | **all 180 checks pass** (tolerance 3e-2) | 17.4 s |
+| `fastwan check --backend cuda` | 63 / 66: the three VSA cases fail at rel 0.28 (`vsa (21, 17, 30) h2 d128`, `vsa (21, 30, 52) h1 d128` and the small d128 case) | |
+
+The fastwan failures are the known check-input problem, not a kernel bug and
+not CUDA 13's: fastwan-rs's `docs/runs/2026-11-18-vast-4090-upscale-everywhere`
+records the same three cases at rel 0.28–0.29 on an RTX 4090 under CUDA 12.8
+(random inputs rounded to bf16 by the upload flip top-k picks; the CPU oracle
+fed the rounded inputs moves 0.21–0.41 from its f32 self). The fix (bf16-
+representable inputs on both sides, fastwan-rs `e72ff08`, extended to the
+small d128 case) is on the fastwan-rs branch of zaitrarrio/fastwan-rs#7; the
+next image picks it up. Every other fastwan check, including the tiny DiT
+VSA / int8 / int4 rollouts, the causal rollouts and the upscaler, passes.
+So: **NVRTC 13.4 → SASS for sm_120 gives the same results as the CUDA 12.8
+PTX builds on both engines.**
+
+### `endpoint.py smoke` (cold worker each time: idle timeout 5 s)
+
+| job | result | stage | load | encode | denoise | decode | mux | execution |
+|---|---|---|---|---|---|---|---|---|
+| `h3-plug4` T2V 832×480×124, seed 7 | COMPLETED, MP4 832×480 124 fr H.264 + AAC 32 kHz (2.09 MB) | 56.5 s | 125.1 s | 0.1 s | 7.5 s (4 steps: 2.03 / 1.82 / 1.82 / 1.82) | 3.6 s | 4.8 s | 200.0 s |
+| `fastwan-1.3b` T2V 832×480×81, seed 7 | COMPLETED, MP4 832×480 81 fr (1.13 MB) | 134.7 s (R2 fetch of the FastWan tree) | 10.0 s | 1.3 s | 1.55 s (3 steps of 0.51–0.53 s) | 0.3 s | 0.2 s | 150.1 s |
+| `fasth3-4step-vsa-480p-taeh3` (fastvideo-rs) T2V 832×480×124, seed 7 | COMPLETED, MP4 832×480 124 fr H.264 + AAC (3.01 MB) | 0 s | 104.1 s (fv-serve) | 0.1 s | 6.2 s (fv-serve's metric: its 4 steps + TAEH3) | — | — | 115.5 s |
+
+All three MP4s downloaded and ffprobe-verified. The h3 load (125 s) now
+includes opening the Qwen3-VL encoder resident (h3-rs's 2026-11-18 text-
+encoder placement: `serve` opens it last, ~35 s on this card), so the prompt
+encodes in 0.13 s; the earlier image's h3 streamed the encoder per prompt
+(load 110 + encode 79 s). fastwan's 0.51 s
+step is fastwan-rs's 0.54 s on this card class; the fastvideo-rs H3 draft
+ran 6.2 s on the Server Edition against 36.1 s on the Workstation Edition
+pod of 00:30 (fv-serve load 104 against 156 s).

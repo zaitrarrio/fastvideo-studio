@@ -48,24 +48,23 @@ def media_urls(ctx: Ctx, job: Job) -> dict[str, Any]:
 
 
 def resident_config(base: str, variant: str) -> str:
-    """The worker's config with `variant` as the one `resident = true` model:
-    fv-serve refuses a config where nothing loads before readiness, and with
-    `swap = true` the other models still load on their first request."""
-    out = []
-    current = None
-    found = False
-    for line in base.splitlines():
-        m = re.match(r'\s*variant\s*=\s*"([^"]+)"', line)
-        if m:
-            current = m.group(1)
-        if re.match(r"\s*resident\s*=", line):
-            on = current == variant
-            found = found or on
-            line = f"resident = {'true' if on else 'false'}"
-        out.append(line)
-    if not found:
+    """The worker's config with `variant` as its only model, `resident = true`:
+    fv-serve refuses a config where nothing loads before readiness, and it
+    refuses one whose models need different process-wide settings (H3 wants
+    FASTVIDEO_BF16_ACT=1, LTX does not), so one process serves one model and
+    the sidecar key carries the model: another fastvideo model restarts it."""
+    head, *blocks = base.split("[[models]]")
+    keep = None
+    for b in blocks:
+        m = re.search(r'variant\s*=\s*"([^"]+)"', b)
+        if m and m.group(1) == variant:
+            keep = re.sub(r"(?m)^\s*resident\s*=.*$", "resident = true", b)
+            if "resident = true" not in keep:
+                keep = keep.rstrip("\n") + "\nresident = true\n"
+            break
+    if keep is None:
         raise JobError("validate", f"fastvideo config lists no model {variant!r}")
-    return "\n".join(out) + "\n"
+    return head.rstrip("\n") + "\n\n[[models]]" + keep.rstrip("\n") + "\n"
 
 
 def serve_argv(ctx: Ctx, variant: str | None = None) -> list[str]:
@@ -81,12 +80,13 @@ def run(ctx: Ctx, job: Job) -> RunResult:
     port = ctx.ports[ENGINE]
     base = f"http://127.0.0.1:{port}"
     load_s = 0.0
+    variant = job.model.recipe["variant"]
+    key = f"{KEY}:{variant}"  # one fv-serve per model (process-wide settings differ across families)
     if not ctx.fv_fake:
         def make() -> Sidecar:
-            # The first job's model is the resident one; later models swap in.
-            return Sidecar(ENGINE, KEY, serve_argv(ctx, job.model.recipe["variant"]), ctx.env[ENGINE], ping_probe(f"{base}/ping"))
+            return Sidecar(ENGINE, key, serve_argv(ctx, variant), ctx.env[ENGINE], ping_probe(f"{base}/ping"))
 
-        sc, load_s = ctx.sidecars.ensure(ENGINE, KEY, make, job.model.vram_gib, lambda st, t: ctx.report("loading", f"{t:.0f} s"))
+        sc, load_s = ctx.sidecars.ensure(ENGINE, key, make, job.model.vram_gib, lambda st, t: ctx.report("loading", f"{t:.0f} s"))
         # A model switch inside fv-serve (swap) needs the VRAM too.
         ctx.sidecars.make_room(ENGINE, job.model.vram_gib)
     else:

@@ -209,6 +209,59 @@ stages ~103 GB; h3-base's `transformer` ~100 GB more for the base / plug /
 turbo recipes). `cd worker && python3 -m pytest -q tests/test_endpoint_script.py`
 checks the bodies and the guards against fake v2 responses.
 
+## Prompt expansion
+
+Every model lists the `expand.prompt` knob (the page sends it as
+`options.prompt`: `off` by default, `balanced` or `quality`). When it is
+on, the worker rewrites the job's prompt before the engine runs, the way
+fastvideo-rs's batch rewrites do (`fvstudio/upsampler.py`, a port of
+`crates/fastvideo-upsampler/src/rewrite.rs` and of
+`deploy/runpod/fv-upsampler.sh`):
+
+- **What runs.** llama.cpp's `llama-server` (the fastvideo-rs serve
+  image's binary, `/opt/fastvideo-rs/bin/llama-server`) as a fourth
+  sidecar (`upsampler`) on `127.0.0.1:18080`, serving Qwen3-VL-4B-Instruct
+  in Q8_0 with its F16 vision projector: the same flags as fastvideo-rs's
+  launcher (`-ngl 99`, flash attention, `q8_0` KV, cached prefix reuse,
+  `--fit off`, no web UI) with a 16 384-token context and one slot (the
+  launcher's 65 536 / 2 are for the director's long sessions; the Studio
+  rewrites one prompt at a time). Readiness is `/health` 200 and one
+  1-token completion, like the launcher.
+- **Memory.** Weights 3.99 GiB + projector 0.78 GiB + KV 1.20 GiB (q8_0 at
+  16 384 tokens: 2 × 36 layers × 8 heads × 128 × 1.0625 B per token) +
+  ~0.5 GiB of compute buffers = **6.5 GiB** (`upsampler.VRAM_GIB`), which
+  `SidecarManager.ensure` reserves beside the engine; at the launcher's
+  65 536 tokens the KV alone is 4.8 GiB. The sidecar stays resident across
+  jobs and engines until a model that does not fit evicts it.
+- **First use.** The GGUF tree `qwen3-vl-4b-instruct-gguf` (4.28 GB model
+  + 0.84 GB projector) is not on the volume: `WeightsResolver.ensure_tree`
+  fetches it from the R2 weights store (`upsampler.TREE`) into the stage
+  dir on the first expanded job, ~5 GB once per container.
+- **The rewrite.** One `POST /v1/chat/completions` (temperature 0.6, the
+  family's token cap): a system prompt per family, ported verbatim from
+  fastvideo-rs: H3 (`h3`, `fv-h3`: the Context-IR layout with its three
+  labelled sections, `[Shot N]` blocks in quality mode), Wan (`fastwan`,
+  `wan`: silent model, motion first), LTX (`ltx`: a cinematographer's
+  paragraph ending in the soundscape); the job's prompt as the user text.
+  Balanced / quality set the target length (60-110 / 120-220 words for
+  H3, 60-100 / 100-160 for Wan, 80-130 / 140-200 for LTX). The answer is
+  cleaned (think blocks, code fences, a `Prompt:` label and wrapping
+  quotes removed, whitespace collapsed; H3 keeps its section lines) and
+  cut to the family's text-encoder budget in characters (Wan 1800, LTX
+  3600, H3 3200, the same budgets fastvideo-rs uses without a tokenizer).
+- **Images and the negative prompt.** A first-frame image goes to the LLM
+  as an `image_url` data part (the projector is loaded) with a system line
+  to keep its look and describe the motion from it; without the projector
+  the text-only wording of fastvideo-rs is used (an unseen image sets the
+  first frame). The negative prompt is never rewritten; the LLM is only
+  told what it excludes.
+- **Fallback.** Any failure (the fetch, the sidecar not coming up, an HTTP
+  error, a timeout, an empty answer) leaves the original prompt and logs
+  `prompt expansion failed (<why>); generating with the original prompt`
+  (`Upsampler.last_error`); the job never fails because of the LLM. The
+  output carries the rewrite as `expanded_prompt` (null when off or
+  fallen back) and `info` lists the sidecar with the others.
+
 ## Catalog notes
 
 The catalog is the contract and is not edited from here, apart from the

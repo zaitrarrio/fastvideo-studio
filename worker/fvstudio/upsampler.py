@@ -557,9 +557,7 @@ def _content_of(r: Any) -> str | None:
         return None
     if isinstance(content, list):  # content parts
         content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-    if not isinstance(content, str) or not content.strip():
-        return None
-    return content
+    return content if isinstance(content, str) else None
 
 
 def image_data_b64(path: str) -> str:

@@ -47,11 +47,11 @@ RUN --mount=type=secret,id=repo_token,required=false \
     fetch "$H3" h3-rs "$H3_REF"; fetch "$FW" fastwan-rs "$FASTWAN_REF"; \
     git -C h3-rs remote set-url origin "$H3_REPO"; git -C fastwan-rs remote set-url origin "$FASTWAN_REPO"; \
     git -C h3-rs rev-parse HEAD > /src/h3.sha; git -C fastwan-rs rev-parse HEAD > /src/fastwan.sha
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/h3-rs/target \
     cd h3-rs && cargo build --release -p h3-cli --no-default-features --features cuda-13 \
  && mkdir -p /out && cp target/release/h3 /out/h3
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/fastwan-rs/target \
     cd fastwan-rs && cargo build --release -p fastwan-cli --features cuda-13 \
  && cp target/release/fastwan /out/fastwan

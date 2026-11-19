@@ -9,10 +9,15 @@
 #            its pinned CUDA 13.4 cuBLAS / cuBLASLt / NVRTC / cudart, cuDNN 9
 #            (fv-serve's SDPA) and its ffmpeg / ffprobe (dynamically linked
 #            against Ubuntu 22.04's libx264 / libvpx / libdav1d / libssl).
-#   final    ubuntu:22.04 + python3 (the handler is stdlib-only, no venv) + the
-#            four codec libraries + the files above, and llama-server (llama.cpp,
-#            CUDA 13, +82 MB) for prompt expansion with Qwen3-VL-4B-Instruct
-#            fetched from R2 on first use. Not copied: fv-boot, perl, apt lists.
+#   studio   the same ubuntu:22.04 + rustup builder: `studio-worker`, the Rust
+#            worker (worker-rs/: RunPod protocol, R2 SigV4, the catalog, the
+#            sidecars; rustls, no OpenSSL): a binary that needs only libc in
+#            the final image.
+#   final    ubuntu:22.04 (no Python: the worker is the `studio-worker` binary)
+#            + the four codec libraries + the files above, and llama-server
+#            (llama.cpp, CUDA 13, +82 MB) for prompt expansion with
+#            Qwen3-VL-4B-Instruct fetched from R2 on first use. Not copied:
+#            fv-boot, perl, apt lists, the Python reference tree (worker/).
 #
 #   docker build -f worker/Dockerfile --build-arg H3_REF=<sha> --build-arg FASTWAN_REF=<sha> -t fastvideo-studio-worker .
 
@@ -20,23 +25,26 @@ ARG FV_SERVE_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:aa2a46574879f515
 ARG BUILDER_IMAGE=ubuntu:22.04
 ARG RUST_VERSION=1.97.0
 
-# ---- stage 1: the two engine binaries, CUDA 13 bindings ----------------------
-# Built on the same Ubuntu 22.04 as the final stage (glibc 2.35), with rustup:
-# the rust:*-bullseye images' apt archives have gone stale (bullseye is past
-# its end of life) and bookworm's glibc 2.36 is newer than the final stage's.
-FROM ${BUILDER_IMAGE} AS engines
+# ---- stage 0: the Rust builder ------------------------------------------------
+# The same Ubuntu 22.04 as the final stage (glibc 2.35), with rustup: the
+# rust:*-bullseye images' apt archives have gone stale (bullseye is past its
+# end of life) and bookworm's glibc 2.36 is newer than the final stage's.
+FROM ${BUILDER_IMAGE} AS rust-builder
 ARG RUST_VERSION
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config \
  && rm -rf /var/lib/apt/lists/*
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}"
 ENV PATH=/root/.cargo/bin:${PATH}
+
+# ---- stage 1: the two engine binaries, CUDA 13 bindings ----------------------
+FROM rust-builder AS engines
 ARG H3_REPO=https://github.com/zaitrarrio/h3-rs.git
 ARG FASTWAN_REPO=https://github.com/zaitrarrio/fastwan-rs.git
 # Pinned commits of branch claude/wizardly-clarke-1a2jta: the `cuda-13` feature
 # (h3-rs PR #6, fastwan-rs PR #7) on top of serve's per-request inputs.
-ARG H3_REF=4a7d38262dd8110356d287c8d42186b0e19cf5b0
-ARG FASTWAN_REF=d746a76ca14766b4b23d1fd17400802efe6408fa
+ARG H3_REF=697fb9a9289f84ae6c6120d87ff284edcb9effdf
+ARG FASTWAN_REF=fa6a318e3895dfa0796c82a1043b6df63b58956a
 WORKDIR /src
 RUN --mount=type=secret,id=repo_token,required=false \
     set -eu; \
@@ -57,6 +65,17 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
  && cp target/release/fastwan /out/fastwan
 RUN strip /out/h3 /out/fastwan && /out/h3 --help >/dev/null && /out/fastwan --help >/dev/null && ls -l /out
 
+# ---- stage 1b: the worker binary (worker-rs/, the Rust port of handler.py) -----
+FROM rust-builder AS studio
+WORKDIR /src/worker-rs
+COPY worker-rs/Cargo.toml worker-rs/Cargo.lock ./
+COPY worker-rs/src ./src
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/src/worker-rs/target \
+    cargo build --release --locked \
+ && mkdir -p /out && cp target/release/studio-worker /out/studio-worker \
+ && strip /out/studio-worker && /out/studio-worker --help >/dev/null && ls -l /out
+
 # ---- stage 2: the file source --------------------------------------------------
 FROM ${FV_SERVE_IMAGE} AS fv
 # cuDNN's libraries are symlink chains (libcudnn_graph.so.9 → .so.9.26.0); a
@@ -70,7 +89,7 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      python3 ca-certificates libx264-163 libvpx7 libdav1d5 libssl3 zlib1g \
+      ca-certificates libx264-163 libvpx7 libdav1d5 libssl3 zlib1g \
  && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
 # CUDA 13.4 (cuBLAS, cuBLASLt, NVRTC + builtins, cudart) and cuDNN 9 from the
 # serve image; libcuda comes from the host driver at run time (R580+).
@@ -90,9 +109,13 @@ RUN for f in /opt/studio/bin/h3 /opt/studio/bin/fastwan; do \
       if ldd "$f" | grep 'not found'; then echo "unresolved: $f"; exit 1; fi; "$f" --help >/dev/null; done
 COPY catalog/catalog.json /opt/studio/catalog/catalog.json
 COPY worker/configs/fastvideo.toml /opt/studio/configs/fastvideo.toml
-COPY worker/handler.py /opt/studio/handler.py
-COPY worker/fvstudio /opt/studio/fvstudio
-RUN python3 -I -c "import sys; sys.path.insert(0, '/opt/studio'); import fvstudio.catalog as c; print(len(c.Catalog.load('/opt/studio/catalog/catalog.json').models), 'catalog models')" \
+COPY --from=studio /out/studio-worker /opt/studio/bin/studio-worker
+# The worker loads and checks the catalog at start: a local job with an unknown
+# op exits 1 with "unknown op" once the catalog parsed (2 when it did not).
+RUN if ldd /opt/studio/bin/studio-worker | grep 'not found'; then echo "unresolved: studio-worker"; exit 1; fi \
+ && echo '{"input": {"op": "catalog-check"}}' > /tmp/catalog-check.json \
+ && (STUDIO_CATALOG=/opt/studio/catalog/catalog.json /opt/studio/bin/studio-worker --test-input /tmp/catalog-check.json || true) | grep -q 'unknown op' \
+ && rm /tmp/catalog-check.json \
  && test -x /opt/fastvideo-rs/bin/fv-serve \
  && mkdir -p /workspace/w /workspace/stage /workspace/jobs /workspace/fv-state
 ARG STUDIO_IMAGE=ghcr.io/zaitrarrio/fastvideo-studio-worker:dev
@@ -103,8 +126,7 @@ ENV STUDIO_IMAGE=${STUDIO_IMAGE} \
     STUDIO_FV_CONFIG=/opt/studio/configs/fastvideo.toml \
     STUDIO_LLAMA_SERVER=/opt/fastvideo-rs/bin/llama-server \
     STUDIO_CUDA12_LIB= \
-    PYTHONUNBUFFERED=1 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 WORKDIR /opt/studio
-ENTRYPOINT ["python3", "-I", "/opt/studio/handler.py"]
+ENTRYPOINT ["/opt/studio/bin/studio-worker"]

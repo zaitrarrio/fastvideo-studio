@@ -12,7 +12,7 @@ browser ── Studio page (static) ── Studio Worker (Cloudflare, holds the 
                                          │  /run /status /cancel          │ R2 (uploads, outputs)
                                          ▼                                ▼
                                RunPod queue endpoint ── worker container ── /runpod-volume (EU weights)
-                                                          handler.py
+                                                          studio-worker
                                                    ┌────────┼─────────┐
                                                 h3 serve  fastwan   fv-serve   (resident sidecars,
                                                 (h3-rs)   serve     (fastvideo-rs)  one per engine)
@@ -31,11 +31,15 @@ browser ── Studio page (static) ── Studio Worker (Cloudflare, holds the 
   (fv-serve's floor); a 13-capable driver runs the 12.8 runtime too.
 - **Queue, not load-balancer**: jobs run 10 s to 8 min; load-balancing
   endpoints cap a request at 5.5 min and drop on overload.
-- **`handler.py`** owns the RunPod job loop (`fvstudio/rp.py`: the SDK's
-  protocol over `urllib`, no SDK, concurrency 1)
-  and dispatches on `input.engine`. Progress goes out with
-  `progress_update`; the result is JSON with presigned R2 URLs (the `/run`
-  output cap is 10 MB; an MP4 is not).
+- **`studio-worker`** (`worker-rs/`, Rust, the image's entrypoint) owns the
+  RunPod job loop (`rp.rs`: the SDK's protocol over a blocking HTTP client,
+  no SDK, concurrency 1) and dispatches on `input.engine`. It is a
+  module-for-module port of the Python worker (`worker/handler.py` +
+  `worker/fvstudio`), which stays in the tree as the reference the port is
+  checked against (same env vars, argv builders, progress ids, output JSON,
+  R2 signatures) until it is removed; the image no longer carries Python.
+  Progress goes out with `progress_update`; the result is JSON with presigned
+  R2 URLs (the `/run` output cap is 10 MB; an MP4 is not).
 - **Sidecars**: `h3 serve` and `fastwan serve` are kept resident, keyed by
   `(engine, model, recipe)`; a job for another model restarts that engine's
   sidecar (h3: ~2 min from staged weights). `fv-serve` runs once with

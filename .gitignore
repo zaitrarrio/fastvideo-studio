@@ -7,3 +7,4 @@ __pycache__/
 studio/docs/*.mp4
 .runpod-endpoint.json
 backstop.log
+worker-rs/target/

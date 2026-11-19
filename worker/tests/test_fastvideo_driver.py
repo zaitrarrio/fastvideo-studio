@@ -77,15 +77,14 @@ def test_refused_body_reports_engine(tmp_path, catalog, fake, monkeypatch):
     assert e.value.where == "engine" and "bogus" in str(e.value)
 
 
-def test_resident_config_marks_the_requested_model(catalog):
+def test_resident_config_keeps_only_the_requested_model(catalog):
     from pathlib import Path
     base = Path(__file__).resolve().parents[1] / "configs" / "fastvideo.toml"
     out = fastvideo.resident_config(base.read_text(), "fastwan22-ti2v-5b")
     blocks = out.split("[[models]]")[1:]
-    on = [b for b in blocks if 'variant = "fastwan22-ti2v-5b"' in b]
-    assert len(on) == 1 and "resident = true" in on[0]
-    assert sum(b.count("resident = true") for b in blocks) == 1
-    assert "swap = true" in out
+    assert len(blocks) == 1 and 'variant = "fastwan22-ti2v-5b"' in blocks[0] and "resident = true" in blocks[0]
+    assert "swap = true" in out and 'bind = "127.0.0.1:8000"' in out
+    assert 'variant = "fasth3-4step-vsa"' not in out  # H3 and LTX / Wan cannot share a process
     import pytest
     from fvstudio.errors import JobError
     with pytest.raises(JobError):

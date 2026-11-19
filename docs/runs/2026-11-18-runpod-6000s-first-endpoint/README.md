@@ -40,3 +40,18 @@ would skip the staging and load.
 Not measured yet: the warm second job, fastwan (R2 fetch of the tree), the
 fastvideo-rs families, upscaling (`STUDIO_ESRGAN` still unset: the volume's
 `upscaler/` file name was not visible to `op: info`).
+
+## 2026-11-19 00:20 UTC: the smoke on image `sha-14dbbce` (R2 secrets in place)
+
+`op: r2`: `write: ok` to `fastvideo-studio`, `read_weights: ok (58 manifests)` from `fv-weights`.
+
+| job | result | stage | load | encode | denoise | decode | mux | total (execution) |
+|---|---|---|---|---|---|---|---|---|
+| `h3-plug4` T2V 832×480×124, seed 7 | COMPLETED, MP4 832×480 124 frames H.264 + AAC 32 kHz (2.1 MB) | 56.5 s | 109.7 s | 79.0 s | 7.8 s (4 steps) | 3.3 s | 0.7 s | 258.0 s |
+| `fastwan-1.3b` T2V 832×480×81, seed 7 | COMPLETED, MP4 832×480 81 frames (1.1 MB) | 124.7 s (first R2 fetch of the FastWan tree) | 8.5 s | 1.4 s | 1.6 s (3 steps) | 0.3 s | 0.9 s | 138.2 s |
+| `fasth3-4step-vsa-480p-taeh3` (fastvideo-rs) | FAILED: fv-serve refuses one process for `fasth3-4step-vsa` and `ltx25-distill-sol` ("need different process-wide settings: FASTVIDEO_BF16_ACT=1 vs {}; serve them from separate processes") | | | | | | | |
+
+The fastwan clip's 1.6 s denoise matches fastwan-rs's 2.2 s clip on the 600 W
+Server Edition (denoise 1.61 s). The h3 stage / load / encode are paid once
+per worker; the worker idles out after 5 s, so a quiet endpoint pays them
+again on the next job (FlashBoot is off).

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # fastvideo-studio worker image, the smallest that runs the three engines:
 #
-#   engines  rust:1.97-bullseye (glibc 2.31 ≤ Ubuntu 22.04's 2.35) builds `h3`
+#   engines  ubuntu:22.04 + rustup (glibc 2.35, the final stage's) builds `h3`
 #            (h3-rs) and `fastwan` (fastwan-rs) with `--features cuda-13`:
 #            cudarc binds CUDA 13 and loads the libraries at run time, so the
 #            three binaries share one runtime (no second 12.8 set, no wheels).
@@ -17,18 +17,26 @@
 #   docker build -f worker/Dockerfile --build-arg H3_REF=<sha> --build-arg FASTWAN_REF=<sha> -t fastvideo-studio-worker .
 
 ARG FV_SERVE_IMAGE=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:aa2a46574879f51544bad5da6d34cf643835d25e1cc6b09417907581ac3fc699
-ARG RUST_IMAGE=rust:1.97-bullseye
+ARG BUILDER_IMAGE=ubuntu:22.04
+ARG RUST_VERSION=1.97.0
 
 # ---- stage 1: the two engine binaries, CUDA 13 bindings ----------------------
-FROM ${RUST_IMAGE} AS engines
+# Built on the same Ubuntu 22.04 as the final stage (glibc 2.35), with rustup:
+# the rust:*-bullseye images' apt archives have gone stale (bullseye is past
+# its end of life) and bookworm's glibc 2.36 is newer than the final stage's.
+FROM ${BUILDER_IMAGE} AS engines
+ARG RUST_VERSION
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}"
+ENV PATH=/root/.cargo/bin:${PATH}
 ARG H3_REPO=https://github.com/zaitrarrio/h3-rs.git
 ARG FASTWAN_REPO=https://github.com/zaitrarrio/fastwan-rs.git
 # Pinned commits of branch claude/wizardly-clarke-1a2jta: the `cuda-13` feature
 # (h3-rs PR #6, fastwan-rs PR #7) on top of serve's per-request inputs.
 ARG H3_REF=8d4be0702587bcb258e686969df1fb2b099d1a9f
 ARG FASTWAN_REF=240dbf994b8c633857f606ace64a0794c06454e3
-RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config libssl-dev clang \
- && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN --mount=type=secret,id=repo_token,required=false \
     set -eu; \

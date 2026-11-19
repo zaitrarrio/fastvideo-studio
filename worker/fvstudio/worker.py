@@ -45,7 +45,7 @@ class Config:
     fv_state_dir: str = "/workspace/fv-state"
     jobs_dir: Path = Path("/workspace/jobs")
     ports: dict[str, int] = field(default_factory=lambda: {"h3": 7861, "fastwan": 7862, "fastvideo": 8000})
-    cuda12_lib: str = "/opt/cuda12/lib"
+    cuda12_lib: str = ""  # a separate CUDA runtime for h3 / fastwan; empty since the one-runtime image
     backend: str = "cuda"
     synthetic: bool = False
     fv_fake: bool = False
@@ -130,8 +130,8 @@ class Worker:
     def env_for(self, engine: str) -> dict[str, str]:
         env = dict(os.environ)
         if engine in ("h3", "fastwan"):
-            # The 12.8 runtime from the nvidia-*-cu12 wheels, ahead of the image's 13.4.
-            env["LD_LIBRARY_PATH"] = self.cfg.cuda12_lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+            if self.cfg.cuda12_lib:  # STUDIO_CUDA12_LIB: a separate runtime ahead of the image's
+                env["LD_LIBRARY_PATH"] = self.cfg.cuda12_lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
         else:
             env["FV_WEIGHTS"] = str(self.roots.link_root)
             env["FV_STATE_DIR"] = self.cfg.fv_state_dir
@@ -154,6 +154,8 @@ class Worker:
                 return self.generate(str(job.get("id") or f"local-{int(time.time())}"), inp, progress)
             if op == "r2":
                 return self.r2check()
+            if op == "check":
+                return self.check(inp)
             raise JobError("validate", f"unknown op {op!r}")
         except JobError as e:
             self.log(f"job failed ({e.where}): {e.message}")
@@ -165,6 +167,32 @@ class Worker:
             sc = self.sidecars.get(str(inp.get("engine") or ""))
             tail = sc.tail(50) if sc is not None else []
             return JobError("engine", f"{type(e).__name__}: {e}", tail[-50:]).to_output()
+
+    def check(self, inp: dict) -> dict:
+        """`op: check`: the engines' own conformance checkers on this card
+        (`h3 check --backend cuda`, `fastwan check --backend cuda`): every op
+        against the CPU reference, the way the engines' CLAUDE.md trusts GPU
+        code. Stops the sidecars first (the checkers want the GPU)."""
+        engines = inp.get("engines") or ["h3", "fastwan"]
+        self.sidecars.stop_all()
+        out: dict = {"op": "check", "backend": self.cfg.backend, "results": {}}
+        for name in engines:
+            if name not in ("h3", "fastwan"):
+                out["results"][name] = {"error": "no checker for this engine"}
+                continue
+            argv = [str(self.cfg.bin_dir / name), "check", "--backend", self.cfg.backend]
+            t0 = time.time()
+            try:
+                r = subprocess.run(argv, capture_output=True, text=True, timeout=float(inp.get("timeout_s", 1800)), env=self.env_for(name))
+                lines = (r.stdout + r.stderr).strip().splitlines()
+                out["results"][name] = {"exit": r.returncode, "seconds": round(time.time() - t0, 1),
+                                        "tail": lines[-40:], "command": " ".join(argv)}
+            except Exception as e:  # noqa: BLE001
+                out["results"][name] = {"error": f"{type(e).__name__}: {e}", "command": " ".join(argv)}
+        g = gpu.query()
+        out["gpu"] = g.name if g else None
+        out["driver"] = g.driver if g else None
+        return out
 
     def r2check(self) -> dict:
         """`op: r2`: can this worker write the Studio bucket and read the

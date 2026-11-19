@@ -25,6 +25,9 @@ MEDIA_INPUT_KEYS = ("first_image", "last_image", "references", "audio", "video",
 MAX_REFERENCES = 12
 # Knob-id prefixes per engine: `options` keys may be short (`weights`) or full (`h3.weights`).
 KNOB_PREFIX = {"h3": "h3", "fastwan": "fw", "fastvideo": "fv"}
+# Knobs any engine's model may list (`expand.prompt`: the worker handles them,
+# no `cli` / `field`). The page sends them by short name like the others.
+SHARED_KNOB_PREFIXES = ("expand",)
 
 
 def default_catalog_path() -> Path:
@@ -286,7 +289,7 @@ class Catalog:
             for k in m.knobs:
                 if k not in self.knobs:
                     raise ValueError(f"catalog: model {m.id} lists unknown knob {k}")
-                if not k.startswith(KNOB_PREFIX[m.engine] + "."):
+                if not k.startswith(KNOB_PREFIX[m.engine] + ".") and k.split(".", 1)[0] not in SHARED_KNOB_PREFIXES:
                     raise ValueError(f"catalog: model {m.id} lists knob {k} of another engine")
             for t in m.tasks:
                 if t not in self.tasks:
@@ -472,7 +475,11 @@ class Catalog:
         for key, value in raw.items():
             kid = key if "." in key else f"{prefix}.{key}"
             if kid not in model.knobs:
-                raise bad(f"model {model.id} has no option {key!r}")
+                # A shared knob by its short name (`prompt` → `expand.prompt`).
+                shared = [k for k in model.knobs if k.split(".", 1)[0] in SHARED_KNOB_PREFIXES and k.split(".", 1)[1] == key]
+                if len(shared) != 1:
+                    raise bad(f"model {model.id} has no option {key!r}")
+                kid = shared[0]
             knob = self.knobs[kid]
             if value is None:
                 continue

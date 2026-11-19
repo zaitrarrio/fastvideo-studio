@@ -2,9 +2,17 @@
 
 The RunPod serverless worker of `docs/design.md`: one container, three
 engines (`h3 serve` / `fastwan serve` / `fv-serve` as resident sidecars, the
-engines' CLIs per job for the tasks serve lacks), driven by `handler.py`
-through the `runpod` SDK. The contract is `docs/jobs.md`; the catalog
-(`catalog/catalog.json`) decides what a job may ask for.
+engines' CLIs per job for the tasks serve lacks), driven by `handler.py`.
+The contract is `docs/jobs.md`; the catalog (`catalog/catalog.json`)
+decides what a job may ask for.
+
+**Stdlib only.** The worker has no third-party dependency: `fvstudio/rp.py`
+speaks RunPod's serverless protocol over `urllib` (what runpod-python's
+`rp_job` / `rp_http` / `rp_ping` do, and what fastvideo-rs's
+`fastvideo-deploy` and h3-rs's `h3 worker` do in Rust) and `fvstudio/r2.py`
+signs R2's S3 API itself (SigV4 with `hmac` / `hashlib`, byte-identical to
+botocore's signer in `tests/test_r2.py`). No venv, no `pip install` in the
+image; `requirements.txt` lists test tools only.
 
 **Not yet run on a GPU.** Everything here was exercised on a CPU box against
 the engines' `--synthetic` serve modes, a fake fv-serve and a local R2
@@ -46,8 +54,8 @@ the engines' `--synthetic` serve modes, a fake fv-serve and a local R2
      `extend_s` / `start_s..end_s` from the requested frames.
    Before a sidecar starts, free VRAM (`nvidia-smi`) is checked against
    the model's `vram_gib` and the other engines' sidecars are stopped when
-   it does not fit. h3 and fastwan run with `LD_LIBRARY_PATH=/opt/cuda12/lib`
-   (the 12.8 cuBLAS / cuBLASLt / NVRTC from the `nvidia-*-cu12` wheels);
+   it does not fit. h3 and fastwan are built with `--features cuda-13` and
+   load the image's CUDA 13.4 cuBLAS / cuBLASLt / NVRTC like fv-serve;
    fv-serve keeps the image's CUDA 13.4.
 4. **mux** (`fvstudio/mux.py`): the frame stream (16-byte LE u32 header +
    RGB8) → y4m through ffmpeg's rawvideo input, y4m + wav → H.264 / AAC
@@ -56,11 +64,41 @@ the engines' `--synthetic` serve modes, a fake fv-serve and a local R2
 5. **upload**: `jobs/<id>/{video.mp4, audio.wav (h3), thumb.jpg, job.json}`
    to the Studio bucket, presigned GETs (24 h) in the output.
 
-Progress goes out with `runpod.serverless.progress_update` as
-`{stage, detail, step, total_steps, frames, total_frames, elapsed_s, engine,
-model}` with the jobs.md stage ids. A sidecar that dies restarts on the next
+Progress goes out as RunPod's `{"status": "IN_PROGRESS", "output": …}`
+(`rp.RunpodClient.progress_update`, from a sender thread so the job never
+waits on the platform) with the object `{stage, detail, step, total_steps,
+frames, total_frames, elapsed_s, engine, model}` verbatim, the jobs.md
+stage ids. A sidecar that dies restarts on the next
 job; a job whose sidecar dies fails with `where: "engine"` and the sidecar's
 last 50 log lines in `log_tail`.
+
+## The RunPod loop (`fvstudio/rp.py`)
+
+```text
+take      GET  $RUNPOD_WEBHOOK_GET_JOB      ($ID → worker id)  &job_in_progress=0|1
+            long poll (90 s); 204 / 400: no job; 429: wait 5 s; errors: 1 → 30 s back-off
+            200: {"id", "input"} or a list of them
+progress  POST $RUNPOD_WEBHOOK_POST_OUTPUT  ($RUNPOD_POD_ID → worker id, $ID → job id) &isStream=false
+            {"status": "IN_PROGRESS", "output": <progress object>}       one attempt
+done      POST same URL                     {"output": …} and / or {"error": …}
+            3 attempts, back-off 1, 1, 2 s; no `status` field: the platform
+            marks the job COMPLETED / FAILED by the presence of `error`
+ping      GET  $RUNPOD_WEBHOOK_PING         ($RUNPOD_POD_ID → worker id) ?job_id=<running>&runpod_version=…
+            every $RUNPOD_PING_INTERVAL ms (10000)
+headers   Authorization: $RUNPOD_AI_API_KEY (raw); on POSTs X-Request-ID: <job id>,
+          Content-Type: application/x-www-form-urlencoded (the body is JSON)
+```
+
+A handler result with an `error` key is FAILED with that error lifted out
+beside `output` (as the SDK's `run_job` does), so `output.where` and
+`log_tail` survive for the Studio and `endpoint.py`; an exception becomes
+the SDK's JSON report (`error_type`, `error_message`, `error_traceback`,
+`hostname`, `worker_id`, `runpod_version`). Concurrency is 1. SIGTERM /
+SIGINT stop the loop after the current job's result is posted. Without
+`RUNPOD_WEBHOOK_GET_JOB` the handler runs in local mode:
+`python3 handler.py --test-input job.json` runs that one job
+(`{"input": …}`) and prints the job-done body (exit 1 when it failed).
+`tests/test_rp.py` drives the loop against a fake RunPod.
 
 `op: info` returns `gpu, driver, image, catalog_version, versions (h3,
 fastwan, fv-serve --version), sidecars, trees (volume / staged / linked per
@@ -79,7 +117,7 @@ its sidecar.
 | `STUDIO_VOLUME`, `STUDIO_VOLUME_WEIGHTS`, `STUDIO_VOLUME_EXTRAS`, `STUDIO_STAGE_DIR`, `STUDIO_LINK_ROOT` | the catalog's `trees` roots (`/runpod-volume`, `…/weights`, `…/h3-rs`, `/workspace/stage`, `/workspace/w`) |
 | `STUDIO_JOBS_DIR` | `/workspace/jobs` (a job's scratch, removed after upload; `STUDIO_KEEP_JOB_DIRS=1` keeps it) |
 | `STUDIO_H3_PORT`, `STUDIO_FASTWAN_PORT`, `STUDIO_FV_PORT` | 7861, 7862, 8000 |
-| `STUDIO_CUDA12_LIB` | `/opt/cuda12/lib` |
+| `STUDIO_CUDA12_LIB` | empty (set to a directory to put a separate CUDA runtime ahead of the image's for h3 / fastwan) |
 | `STUDIO_BACKEND`, `STUDIO_SYNTHETIC`, `STUDIO_FV_FAKE` | `cuda`; `1` starts the serves with `--synthetic`; `1` assumes an fv-serve already listens (tests) |
 | `STUDIO_ESRGAN` | Real-ESRGAN weights for `upscale` (`/workspace/w/h3-rs/assets/realesr-animevideov3.safetensors`; upscale jobs are refused while the file is missing) |
 | `STUDIO_TAEH3` | `taeh3.safetensors` for `preview` (`/workspace/w/auxiliary/tae/taeh3.safetensors`) |
@@ -92,7 +130,7 @@ its sidecar.
 ```sh
 cargo build --release -p h3-cli        # in h3-rs    (default features: wgpu; no GPU needed for --synthetic)
 cargo build --release -p fastwan-cli   # in fastwan-rs
-cd worker && python3 -m pytest -q tests                  # 70 unit tests, no engines (pytest.ini skips e2e)
+cd worker && python3 -m pytest -q tests                  # 124 unit tests, no engines (pytest.ini skips e2e)
 STUDIO_E2E=1 python3 -m pytest -q tests/test_e2e.py -s   # builds both, runs the handler end to end
 ```
 
@@ -100,7 +138,7 @@ The e2e test runs `h3 serve --synthetic --backend cpu` (a 480×272×124 clip
 in ~32 s on 4 cores: 8 steps of ~2.5 s, 11 s of decode), `fastwan serve
 --synthetic --backend cpu` (480×272×17 in ~15 s, 9.5 s of it the synthetic
 ×2 upscaler), a fake fv-serve
-(`tests/fake_fv_serve.py`), a fake `runpod` module and a directory as R2,
+(`tests/fake_fv_serve.py`), a recording `progress_update` and a directory as R2,
 and checks the MP4s with ffprobe (the mux assertions are skipped without
 ffmpeg). A hand run without pytest:
 
@@ -116,20 +154,21 @@ print(h({"id": "x", "input": {"engine": "h3", "model": "fasth3-v2", "prompt": "a
 `worker/Dockerfile` (built by `.github/workflows/worker-image.yml` into
 `ghcr.io/zaitrarrio/fastvideo-studio-worker:{sha-<sha>,latest}`):
 
-- stage 1, `rust:1.97-bookworm`: `h3` and `fastwan` from the pinned commits
-  (`H3_REF`, `FASTWAN_REF`; branch `claude/wizardly-clarke-1a2jta` at the
-  time of writing) with `--features cuda` (cudarc, dynamic loading: no CUDA
-  toolkit in the build; h3 without its default `wgpu` feature);
-- stage 2, `ghcr.io/zaitrarrio/fastvideo-rs-serve:cuda-stable` (fv-serve,
-  fv-boot, CUDA 13.4 libraries, a static ffmpeg with libx264 / aac / nvenc,
-  Ubuntu 22.04, python3.10): `python3-pip` / `-venv`, a venv at
-  `/opt/studio/venv` with `runpod`, `boto3`, `nvidia-cublas-cu12==12.8.*`,
-  `nvidia-cuda-nvrtc-cu12==12.8.*` (their `.so`s linked into
-  `/opt/cuda12/lib` as `libcublas.so.12`, `libcublasLt.so.12`,
-  `libnvrtc.so.12`, `libnvrtc-builtins…`), the two binaries at
-  `/opt/studio/bin`, the catalog, `configs/fastvideo.toml` and this package;
-  entrypoint `python /opt/studio/handler.py` (not fv-boot: the handler links
-  the volume and stages weights itself).
+- stage 1 (`engines`), `rust:1.97-bullseye`: `h3` and `fastwan` from the
+  pinned commits (`H3_REF`, `FASTWAN_REF`; branch
+  `claude/wizardly-clarke-1a2jta` at the time of writing) with
+  `--features cuda-13` (cudarc binds CUDA 13 and loads the libraries at run
+  time: no CUDA toolkit in the build, no second 12.8 runtime, no wheels; h3
+  without its default `wgpu` feature);
+- stage 2 (`fv`), the fastvideo-rs serve image, a file source only:
+  fv-serve, llama-server, its CUDA 13.4 cuBLAS / cuBLASLt / NVRTC / cudart,
+  cuDNN 9 and its ffmpeg / ffprobe;
+- stage 3, `ubuntu:22.04` + `python3` (the handler and `fvstudio` are
+  stdlib-only: no venv, no pip, nothing installed) + the four codec
+  libraries + the files above, the two binaries at `/opt/studio/bin`, the
+  catalog, `configs/fastvideo.toml` and this package; entrypoint
+  `python3 -I /opt/studio/handler.py` (not fv-boot: the handler links the
+  volume and stages weights itself).
 
 `FV_SERVE_IMAGE` is a build arg: until fastvideo-rs promotes a release,
 `:cuda-stable` may not exist (`docs/serve/images.md`) and `:cuda-latest` is

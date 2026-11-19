@@ -31,7 +31,8 @@ browser ── Studio page (static) ── Studio Worker (Cloudflare, holds the 
   (fv-serve's floor); a 13-capable driver runs the 12.8 runtime too.
 - **Queue, not load-balancer**: jobs run 10 s to 8 min; load-balancing
   endpoints cap a request at 5.5 min and drop on overload.
-- **`handler.py`** owns the RunPod job loop (`runpod` SDK, concurrency 1)
+- **`handler.py`** owns the RunPod job loop (`fvstudio/rp.py`: the SDK's
+  protocol over `urllib`, no SDK, concurrency 1)
   and dispatches on `input.engine`. Progress goes out with
   `progress_update`; the result is JSON with presigned R2 URLs (the `/run`
   output cap is 10 MB; an MP4 is not).

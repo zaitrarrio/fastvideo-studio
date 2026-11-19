@@ -55,3 +55,14 @@ The fastwan clip's 1.6 s denoise matches fastwan-rs's 2.2 s clip on the 600 W
 Server Edition (denoise 1.61 s). The h3 stage / load / encode are paid once
 per worker; the worker idles out after 5 s, so a quiet endpoint pays them
 again on the next job (FlashBoot is off).
+
+## 2026-11-19 00:30 UTC: the fastvideo-rs job on image `sha-e1e9f66` (one fv-serve per model)
+
+`fasth3-4step-vsa-480p-taeh3` T2V 832×480×124, seed 7 (worker: RTX PRO 6000
+Blackwell **Workstation** Edition this time, driver 595.112.07): COMPLETED,
+MP4 832×480 124 frames H.264 + AAC 32 kHz (3.0 MB, ffprobe). fv-serve load
+156.0 s (h3-base from the volume, FastH3 4-step LoRA, TAEH3), denoise 36.1 s
+by fv-serve's metrics (its 4 steps + TAEH3 decode; the worker reports
+fv-serve's numbers, `decode_s` 0), execution 195.6 s, cold worker start
+170 s. With that, every engine of the catalog has produced a clip through
+the endpoint.

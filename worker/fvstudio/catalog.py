@@ -29,6 +29,16 @@ KNOB_PREFIX = {"h3": "h3", "fastwan": "fw", "fastvideo": "fv"}
 # no `cli` / `field`). The page sends them by short name like the others.
 SHARED_KNOB_PREFIXES = ("expand",)
 
+# Option names an older page still sends, mapped to the knob that replaced
+# them: old key -> (new knob id, {old value: new value}). The page and the
+# worker image deploy separately, so a renamed knob stays accepted under its
+# old name (fv-serve's `prompt_expansion` of the 2026-11-18 catalog became the
+# shared `expand.prompt` knob).
+KNOB_ALIASES: dict[str, tuple[str, dict[str, str]]] = {
+    "prompt_expansion": ("expand.prompt", {"disabled": "off"}),
+    "fv.prompt_expansion": ("expand.prompt", {"disabled": "off"}),
+}
+
 
 def default_catalog_path() -> Path:
     env = os.environ.get("STUDIO_CATALOG")
@@ -473,6 +483,11 @@ class Catalog:
         prefix = KNOB_PREFIX[model.engine]
         out: dict[str, Any] = {}
         for key, value in raw.items():
+            alias = KNOB_ALIASES.get(key)
+            if alias and alias[0] in model.knobs:
+                key = alias[0]
+                if isinstance(value, str):
+                    value = alias[1].get(value, value)
             kid = key if "." in key else f"{prefix}.{key}"
             if kid not in model.knobs:
                 # A shared knob by its short name (`prompt` → `expand.prompt`).

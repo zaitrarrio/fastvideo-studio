@@ -27,6 +27,40 @@ pub const MAX_REFERENCES: usize = 12;
 /// them, no `cli` / `field`). The page sends them by short name like the others.
 pub const SHARED_KNOB_PREFIXES: [&str; 1] = ["expand"];
 
+/// Option names an older page still sends, mapped to the knob that replaced
+/// them: `(old key, new knob id, [(old value, new value)])`. The page and the
+/// worker image deploy separately (a Worker deploy against a newer image, or
+/// the reverse), so a renamed knob must stay accepted under its old name, or
+/// every job from the older page fails validation.
+pub const KNOB_ALIASES: [(&str, &str, &[(&str, &str)]); 2] = [
+    // fv-serve's own `prompt_expansion` field (catalog of 2026-11-18) became
+    // the shared `expand.prompt` knob (the worker's llama-server sidecar).
+    ("prompt_expansion", "expand.prompt", &[("disabled", "off")]),
+    (
+        "fv.prompt_expansion",
+        "expand.prompt",
+        &[("disabled", "off")],
+    ),
+];
+
+/// The knob an old option name stands for on this model, with its value
+/// translated; `None` when the key is not an alias or the model lacks the knob.
+pub fn knob_alias(model: &Model, key: &str, value: &Value) -> Option<(String, Value)> {
+    let (_, kid, values) = KNOB_ALIASES.iter().find(|(old, _, _)| *old == key)?;
+    if !model.knobs.iter().any(|k| k == kid) {
+        return None;
+    }
+    let v = match value.as_str() {
+        Some(s) => values
+            .iter()
+            .find(|(o, _)| *o == s)
+            .map(|(_, n)| Value::from(*n))
+            .unwrap_or_else(|| value.clone()),
+        None => value.clone(),
+    };
+    Some((kid.to_string(), v))
+}
+
 /// Knob-id prefixes per engine: `options` keys may be short (`weights`) or full (`h3.weights`).
 pub fn knob_prefix(engine: &str) -> &'static str {
     match engine {
@@ -997,6 +1031,11 @@ impl Catalog {
         let prefix = knob_prefix(&model.engine);
         let mut out = Map::new();
         for (key, value) in raw {
+            let (key, value) = match knob_alias(model, key, value) {
+                Some((kid, v)) => (kid, v),
+                None => (key.clone(), value.clone()),
+            };
+            let (key, value) = (&key, &value);
             let mut kid = if key.contains('.') {
                 key.clone()
             } else {
@@ -1204,6 +1243,32 @@ pub mod tests {
             assert_eq!(e.where_, "validate");
             assert!(e.message.contains(needle), "{patch}: {}", e.message);
         }
+    }
+
+    #[test]
+    fn an_older_pages_prompt_expansion_option_is_the_expand_prompt_knob() {
+        // The page deployed on 2026-11-18 sends fv-serve's `prompt_expansion`
+        // ("disabled" by default) for every fastvideo model; the image of the
+        // next day knows only `expand.prompt`. Both spellings, the value
+        // translated (an explicit off is what today's page sends too).
+        let c = catalog();
+        let fv = |opts: Value| json!({"engine": "fastvideo", "model": "ltx25-distill-dense", "prompt": "p", "options": opts});
+        let j = c
+            .validate(&fv(json!({"prompt_expansion": "disabled"})))
+            .unwrap();
+        assert_eq!(j.options["expand.prompt"], json!("off"));
+        assert_eq!(j.explicit["expand.prompt"], json!("off"));
+        let j = c
+            .validate(&fv(json!({"fv.prompt_expansion": "balanced"})))
+            .unwrap();
+        assert_eq!(j.explicit["expand.prompt"], json!("balanced"));
+        let e = c
+            .validate(&fv(json!({"prompt_expansion": "sometimes"})))
+            .unwrap_err();
+        assert!(e.message.starts_with("option prompt:"), "{}", e.message);
+        // The alias never invents a knob: a model without expand.prompt still refuses it.
+        let e = c.validate(&fv(json!({"nope": 1}))).unwrap_err();
+        assert!(e.message.contains("no option"), "{}", e.message);
     }
 
     #[test]

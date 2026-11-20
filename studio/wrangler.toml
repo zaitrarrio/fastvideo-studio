@@ -23,7 +23,7 @@ ENDPOINT_LABEL = "RunPod EU · PRO 6000"
 # The pod backend (docs/pod-mode.md): the worker image the pod runs in `serve`
 # mode (the same image as the endpoint's), its GPU type, data centre and the
 # weights volume, the container disk, the wall-clock cap in hours.
-POD_IMAGE = "ghcr.io/zaitrarrio/fastvideo-studio-worker:sha-34ddc72"
+POD_IMAGE = "ghcr.io/zaitrarrio/fastvideo-studio-worker:sha-91c0ff4"
 POD_GPU = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
 POD_DC = "EU-RO-1"
 POD_VOLUME = "bz0ofkfx45"

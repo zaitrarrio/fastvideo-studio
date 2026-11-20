@@ -176,3 +176,29 @@ not name (fv-serve reports `load_s` only for the process start). The saving
 against a restart is the process start and the model's `resident` load
 path, about 50 s here; the real win is in the pod mode, where the group's
 models stay loaded across jobs (`docs/runs/2026-11-19-runpod-6000w-pod-mode`).
+
+## 2026-11-20 07:10 UTC: image `sha-91c0ff4` (the `prompt_expansion` alias), Worker redeployed
+
+A fastvideo-rs job from the page failed with `model ltx25-distill-dense has
+no option 'prompt_expansion'`: the Worker deployed on 2026-11-18 bundles
+that day's catalog, whose fastvideo models had fv-serve's
+`fv.prompt_expansion` knob (default `disabled`, sent with every job), while
+the endpoint had moved to `sha-db8ffb0`, whose catalog knows only the
+shared `expand.prompt`. Two fixes, both applied:
+
+- The worker accepts the old name (`KNOB_ALIASES`: `prompt_expansion` /
+  `fv.prompt_expansion` → `expand.prompt`, `disabled` → `off`; 91c0ff4).
+  The endpoint `wusgagr2t5am6d` was moved to `sha-91c0ff4` with
+  `PATCH /v2/serverless/{id}` (`image` + the same `env` with `STUDIO_IMAGE`
+  updated; the `{{ RUNPOD_SECRET_* }}` references unchanged).
+- The Studio Worker was redeployed from 169681d (`npx wrangler@4 deploy`,
+  version `49abf767`): `/api/catalog` now lists `expand.prompt` on
+  `ltx25-distill-dense` and no `prompt_expansion` knob. The Worker's
+  secrets are `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`, `STUDIO_TOKEN`; the
+  Cloudflare Stream pair for live streams is not set yet.
+
+Probe on the moved endpoint (no model load: validation runs first):
+`{"engine":"fastvideo","model":"ltx25-distill-dense","options":{"prompt_expansion":"disabled","nope":1}}`
+→ `FAILED in 6.5 s (delay 4143 ms, execution 229 ms)`, error
+`model ltx25-distill-dense has no option 'nope'`: the old name passed the
+alias, and only the bogus option was refused.

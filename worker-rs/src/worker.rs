@@ -66,7 +66,7 @@ impl Config {
             ports: [
                 ("h3", 7861u16),
                 ("fastwan", 7862),
-                ("fastvideo", 8000),
+                ("fastvideo", 8010), // not 8000: `studio-worker serve` listens there on a pod
                 ("upsampler", up::DEFAULT_PORT),
             ]
             .into_iter()
@@ -752,7 +752,7 @@ impl Worker {
                 .ensure("fastwan", &key, &make, model.vram_gib, Some(&loading))?
                 .1;
         } else if engine == "fastvideo" && !self.cfg.fv_fake {
-            let port = *self.cfg.ports.get("fastvideo").unwrap_or(&8000);
+            let port = *self.cfg.ports.get("fastvideo").unwrap_or(&8010);
             let argv = fastvideo::serve_argv(&ctx, None)?;
             let env = ctx.env_of("fastvideo");
             let make = || {
@@ -1084,7 +1084,7 @@ mod tests {
                 c.ports["fastvideo"],
                 c.ports["upsampler"]
             ),
-            (7881, 7862, 8000, 18080)
+            (7881, 7862, 8010, 18080)
         );
         assert!(
             c.synthetic

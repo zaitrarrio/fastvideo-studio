@@ -412,6 +412,20 @@ describe("live streams on the pod", () => {
     assert.equal(r.status, 400);
   });
 
+  test("a sidecar's death on the pod shows its last log line", async () => {
+    const e = env(podEnvVars);
+    await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));
+    globalThis.fetch = fakeWorld({
+      pod: {
+        "/streams": () => new Response(JSON.stringify({ error: "fastvideo sidecar exited with code 1 while loading", where: "engine", log_tail: ["\u001b[2m2026-11-20T07:58:50Z\u001b[0m INFO fv_serve: fv-serve 0.1.87", "fv-serve: Address already in use (os error 98)"] }), { status: 503, headers: { "Content-Type": "application/json" } }),
+      },
+    });
+    const r = await worker.fetch(req("/api/streams", { method: "POST", body: { model: fvModel, prompt: "a fox" } }), e);
+    assert.equal(r.status, 503);
+    const body = await r.json();
+    assert.match(body.error, /exited with code 1 while loading \(fv-serve: Address already in use \(os error 98\)\)$/);
+  });
+
   test("open, status, command and stop go to the pod with its token", async () => {
     const e = env(podEnvVars);
     await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));

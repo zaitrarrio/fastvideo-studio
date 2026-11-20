@@ -219,7 +219,13 @@ async function pod(env, rec, path, { method = "GET", body, timeoutMs = 60_000 } 
   const textBody = await r.text();
   let data;
   try { data = textBody ? JSON.parse(textBody) : {}; } catch { data = { raw: textBody }; }
-  if (!r.ok) throw new HttpError(r.status === 401 ? 502 : r.status, `the pod answered ${r.status} on ${path}: ${data.error || data.raw || textBody}`.slice(0, 400));
+  if (!r.ok) {
+    // A sidecar's death carries its log tail; the last line names the cause
+    // ("Address already in use", a missing tree, ...): show it.
+    const tail = Array.isArray(data.log_tail) ? data.log_tail.map((l) => String(l).replace(/\x1b\[[0-9;]*m/g, "").trim()).filter(Boolean) : [];
+    const why = tail.length ? ` (${tail[tail.length - 1]})` : "";
+    throw new HttpError(r.status === 401 ? 502 : r.status, `the pod answered ${r.status} on ${path}: ${data.error || data.raw || textBody}${why}`.slice(0, 600));
+  }
   return data;
 }
 

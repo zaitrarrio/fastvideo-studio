@@ -173,23 +173,44 @@ pub fn group_config(base: &str, members: &[String], resident: &str) -> JobResult
     ))
 }
 
+/// The config with fv-serve bound to `127.0.0.1:{port}`: the worker's port
+/// table decides the port, not the file. In pod mode `studio-worker serve`
+/// itself listens on 8000, the file's bind, and fv-serve died at start with
+/// "Address already in use" (2026-11-20, the first live stream on a pod).
+pub fn with_bind(cfg: &str, port: u16) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_server = false;
+    let mut done = false;
+    for l in cfg.lines() {
+        let t = l.trim();
+        if t.starts_with('[') {
+            in_server = t == "[server]";
+        }
+        if !done && in_server && t.starts_with("bind") && t[4..].trim_start().starts_with('=') {
+            out.push(format!("bind = \"127.0.0.1:{port}\""));
+            done = true;
+        } else {
+            out.push(l.to_string());
+        }
+    }
+    let mut s = out.join("\n");
+    if cfg.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
+
 pub fn serve_argv(ctx: &Ctx, variant: Option<&str>) -> JobResult<Vec<String>> {
-    let Some(variant) = variant else {
-        return Ok(vec![
-            ctx.fv_serve_bin.clone(),
-            "--config".into(),
-            ctx.fv_config.clone(),
-        ]);
-    };
     let cfg = PathBuf::from(&ctx.fv_state_dir).join("fastvideo.toml");
     if let Some(p) = cfg.parent() {
         std::fs::create_dir_all(p)?;
     }
     let base = std::fs::read_to_string(&ctx.fv_config)?;
-    std::fs::write(
-        &cfg,
-        group_config(&base, &group_members(ctx.models, variant), variant)?,
-    )?;
+    let text = match variant {
+        Some(variant) => group_config(&base, &group_members(ctx.models, variant), variant)?,
+        None => base,
+    };
+    std::fs::write(&cfg, with_bind(&text, ctx.port(ENGINE)))?;
     Ok(vec![
         ctx.fv_serve_bin.clone(),
         "--config".into(),
@@ -456,6 +477,14 @@ mod tests {
             assert!(members.contains(&v.to_string()));
         }
         assert!(out.contains("swap = true") && out.contains("bind = \"127.0.0.1:8000\""));
+        // The port comes from the worker's table, never from the file.
+        let bound = with_bind(&out, 8010);
+        assert!(
+            bound.contains("[server]\nbind = \"127.0.0.1:8010\"\n"),
+            "{bound}"
+        );
+        assert!(!bound.contains("8000\""));
+        assert_eq!(bound.matches("bind = ").count(), 1);
         assert!(!out.contains("variant = \"fasth3-4step-vsa\"")); // H3 and LTX / Wan cannot share a process
         assert!(!out.contains("variant = \"fastwan21-1.3b\"")); // FastWan 2.1's VSA flag is process-wide
                                                                 // Every H3 model is one process, as fastvideo-rs's runpod-family-h3.toml.

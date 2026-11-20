@@ -49,7 +49,7 @@ the engines' `--synthetic` serve modes, a fake fv-serve and a local R2
      `long`.
    - fastvideo: one `fv-serve --config configs/fastvideo.toml` (swap = true,
      every variant `resident = false`, auth none, local artifacts, memory
-     jobs, bound to 127.0.0.1:8000) through `POST /fv/v1/jobs`; media as
+     jobs, bound to 127.0.0.1:8010, the worker's fastvideo port) through `POST /fv/v1/jobs`; media as
      https URLs, presigned R2 GETs or data URIs; `extend` / `retake` derive
      `extend_s` / `start_s..end_s` from the requested frames.
    Before a sidecar starts, free VRAM (`nvidia-smi`) is checked against

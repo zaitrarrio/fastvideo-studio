@@ -942,6 +942,20 @@ pub fn serve(
     stop: Arc<AtomicBool>,
     ready: Option<&dyn Fn(String)>,
 ) -> Result<(), String> {
+    // fv-serve binds 127.0.0.1:<its port>; the same port here would let the
+    // sidecar die at start with "Address already in use" on every stream.
+    let fv_port = worker.cfg.ports.get("fastvideo").copied().unwrap_or(0);
+    let bind_port = cfg
+        .bind
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok());
+    if bind_port == Some(fv_port) && fv_port != 0 {
+        return Err(format!(
+            "serve: STUDIO_SERVE_BIND {} uses fv-serve's port {fv_port}; set STUDIO_FV_PORT to another port",
+            cfg.bind
+        ));
+    }
     let server = Server::http(&cfg.bind).map_err(|e| format!("serve: bind {}: {e}", cfg.bind))?;
     let addr = server.server_addr().to_string();
     let state = Arc::new(State {

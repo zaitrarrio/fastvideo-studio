@@ -47,7 +47,9 @@ per page (the choice persists in the browser).
 ## 2. `studio-worker serve`
 
 A small HTTP server (`tiny_http`, no async runtime, the crate's style) on
-`STUDIO_SERVE_BIND` (`0.0.0.0:8000`), bearer `STUDIO_SERVE_TOKEN` on every
+`STUDIO_SERVE_BIND` (`0.0.0.0:8000`; fv-serve therefore binds the worker's
+fastvideo port, 8010, never the config file's 8000: the first stream on a
+pod died with "Address already in use", 2026-11-20), bearer `STUDIO_SERVE_TOKEN` on every
 route (`STUDIO_SERVE_NO_AUTH=1` only for tests).
 
 | route | behaviour |

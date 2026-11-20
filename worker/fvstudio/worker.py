@@ -46,7 +46,7 @@ class Config:
     fv_config: str = "/opt/studio/configs/fastvideo.toml"
     fv_state_dir: str = "/workspace/fv-state"
     jobs_dir: Path = Path("/workspace/jobs")
-    ports: dict[str, int] = field(default_factory=lambda: {"h3": 7861, "fastwan": 7862, "fastvideo": 8000, "upsampler": up.DEFAULT_PORT})
+    ports: dict[str, int] = field(default_factory=lambda: {"h3": 7861, "fastwan": 7862, "fastvideo": 8010, "upsampler": up.DEFAULT_PORT})  # not 8000: the serve mode listens there on a pod
     llama_bin: str = up.LLAMA_BIN
     cuda12_lib: str = ""  # a separate CUDA runtime for h3 / fastwan; empty since the one-runtime image
     backend: str = "cuda"

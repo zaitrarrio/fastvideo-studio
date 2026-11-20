@@ -235,6 +235,12 @@ fn serve_config_needs_a_token_unless_told_not_to() {
     let c = ServeConfig::from_env(&e).unwrap();
     assert!(c.token.is_none());
     assert_eq!(c.bind, fvstudio::serve::DEFAULT_BIND);
+    // The serve must never take fv-serve's port (the sidecar would die at
+    // start with "Address already in use", as it did on the first pod).
+    assert_ne!(
+        fvstudio::worker::Config::from_env(&HashMap::new()).ports["fastvideo"],
+        c.bind.rsplit(':').next().unwrap().parse::<u16>().unwrap()
+    );
     assert_eq!(c.pod_hours, 4.0);
     e.insert("STUDIO_POD_HOURS".into(), "x".into());
     assert!(ServeConfig::from_env(&e)

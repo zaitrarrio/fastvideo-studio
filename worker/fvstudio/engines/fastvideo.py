@@ -95,12 +95,29 @@ def group_config(base: str, members: list[str], resident: str) -> str:
     return head.rstrip("\n") + "\n\n" + "\n".join(keep)
 
 
+def with_bind(cfg: str, port: int) -> str:
+    """The config with fv-serve bound to 127.0.0.1:<port>: the worker's port
+    table decides the port, not the file (in pod mode the serve itself holds
+    8000, the file's bind, and fv-serve died with "Address already in use")."""
+    out, in_server, done = [], False, False
+    for line in cfg.split("\n"):
+        t = line.strip()
+        if t.startswith("["):
+            in_server = t == "[server]"
+        if not done and in_server and t.startswith("bind") and t[4:].lstrip().startswith("="):
+            out.append(f'bind = "127.0.0.1:{port}"')
+            done = True
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def serve_argv(ctx: Ctx, variant: str | None = None) -> list[str]:
-    if variant is None:
-        return [ctx.fv_serve_bin, "--config", ctx.fv_config]
     cfg = Path(ctx.fv_state_dir) / "fastvideo.toml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(group_config(Path(ctx.fv_config).read_text(), group_members(ctx.models, variant), variant))
+    base = Path(ctx.fv_config).read_text()
+    text = group_config(base, group_members(ctx.models, variant), variant) if variant is not None else base
+    cfg.write_text(with_bind(text, ctx.ports[ENGINE]))
     return [ctx.fv_serve_bin, "--config", str(cfg)]
 
 

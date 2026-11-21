@@ -39,3 +39,42 @@ Stream credentials (`CF_ACCOUNT_ID` / `CF_STREAM_API_TOKEN` on the Worker,
 resident for a process group) was not timed: the same path ran on the
 endpoint the same afternoon (`docs/runs/2026-11-18-runpod-6000s-first-endpoint`,
 the per-process-group section).
+
+## 2026-11-21: three pod-only faults, from the first real stream and segment
+
+The owner's pods (`sha-91c0ff4`, then `sha-8e0ced8`) failed at every live
+stream and every segment session. Three faults in a row, each hidden by the
+one before it, all of them pod-only (the serverless endpoint never hits
+them):
+
+1. **fv-serve's port.** `studio-worker serve` listens on `0.0.0.0:8000` and
+   the image's fv-serve config bound `127.0.0.1:8000`: the sidecar died at
+   start with `Address already in use (os error 98)`, reported as
+   "fastvideo sidecar exited with code 1 while loading". `serve_argv` now
+   rewrites `[server] bind` to the worker's fastvideo port (8010 by default,
+   `STUDIO_FV_PORT`) in the config it starts fv-serve with, and the serve
+   refuses to start on that port (8e0ced8).
+2. **No staging on the stream path.** `fastvideo_serve` (`/streams`,
+   `/segments`) went straight to `ensure_serve`, so fv-serve started with no
+   weights linked or staged, its resident model's load failed and its
+   `/ping` answered 503 `{"status":"failed"}` → "fastvideo failed to start".
+   The job path had always staged first; this one does too now (8db1408).
+   The workaround on a running pod is one clip job for the model.
+3. **fv-serve's artifact URLs.** With the weights staged by a clip job, a
+   480p H3 clip loaded in 130 s and denoised, then the job failed:
+   `HTTP 404 from https://<pod>-8010.proxy.runpod.net/files/…`. fv-serve
+   discovers the pod's public base (`Discovery::public_base_url`) and builds
+   artifact URLs on **its own** port, which Runpod's proxy only answers for
+   the one exposed port — and which sent the worker's own download out over
+   the internet. It now gets `FV_PUBLIC_BASE_URL=http://127.0.0.1:<its
+   port>` (9ea0d36).
+
+Also: the Studio Worker showed the pod error's **last** log line, which was
+fv-serve's own request trace ("response failed classification=Status code:
+503"); it now skips those and picks the line that names the cause. And
+`CF_ACCOUNT_ID` / `CF_STREAM_API_TOKEN` added in the dashboard as plain
+variables were wiped by the next `wrangler deploy`: `keep_vars = true`
+(2de0202), with both named as secrets in the README.
+
+Not yet seen on a pod: a live stream reaching `publishing`, and a segment
+MP4 mirrored to R2. The pod was gone before `sha-9ea0d36` existed.

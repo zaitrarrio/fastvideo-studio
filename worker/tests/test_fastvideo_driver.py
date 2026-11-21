@@ -1,3 +1,4 @@
+import re
 """The fastvideo driver against a fake fv-serve HTTP server in-process."""
 
 
@@ -77,15 +78,25 @@ def test_refused_body_reports_engine(tmp_path, catalog, fake, monkeypatch):
     assert e.value.where == "engine" and "bogus" in str(e.value)
 
 
-def test_resident_config_keeps_only_the_requested_model(catalog):
+def test_group_config_keeps_the_process_group_with_the_requested_model_resident(catalog):
     from pathlib import Path
     base = Path(__file__).resolve().parents[1] / "configs" / "fastvideo.toml"
-    out = fastvideo.resident_config(base.read_text(), "fastwan22-ti2v-5b")
+    members = fastvideo.group_members(catalog.models, "fastwan22-ti2v-5b")
+    assert members == ["fastwan22-ti2v-5b", "wan22-ti2v-5b", "fastwan22-ti2v-5b-taehv"]
+    out = fastvideo.group_config(base.read_text(), members, "fastwan22-ti2v-5b")
     blocks = out.split("[[models]]")[1:]
-    assert len(blocks) == 1 and 'variant = "fastwan22-ti2v-5b"' in blocks[0] and "resident = true" in blocks[0]
+    assert len(blocks) == 3
+    for b in blocks:
+        v = re.search(r'variant = "([^"]+)"', b).group(1)
+        assert v in members and (("resident = true" in b) == (v == "fastwan22-ti2v-5b"))
     assert "swap = true" in out and 'bind = "127.0.0.1:8000"' in out
     assert 'variant = "fasth3-4step-vsa"' not in out  # H3 and LTX / Wan cannot share a process
+    assert 'variant = "fastwan21-1.3b"' not in out  # FastWan 2.1's VSA flag is process-wide
+    h3 = fastvideo.group_members(catalog.models, "sol-h3")
+    assert h3[0] == "sol-h3" and len(h3) == sum(1 for m in catalog.models if m.engine == "fastvideo" and m.family == "fv-h3")
+    alone = fastvideo.group_config(base.read_text(), fastvideo.group_members([], "ltx25-ref2v"), "ltx25-ref2v")
+    assert len(alone.split("[[models]]")) == 2
     import pytest
     from fvstudio.errors import JobError
     with pytest.raises(JobError):
-        fastvideo.resident_config(base.read_text(), "no-such-model")
+        fastvideo.group_config(base.read_text(), ["no-such-model"], "no-such-model")

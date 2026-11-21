@@ -27,6 +27,28 @@
         <p class="msg bad" id="unlock-err" hidden></p>
       </div>
 
+      <h2>Run on</h2>
+      <div class="modes" id="backends" role="group" aria-label="Backend">
+        <button type="button" data-backend="serverless" aria-pressed="true">Serverless queue</button>
+        <button type="button" data-backend="pod" aria-pressed="false">Pod</button>
+      </div>
+      <div class="podbox" id="podbox" hidden>
+        <p class="hint" id="pod-text">Checking the pod…</p>
+        <div class="controls">
+          <button type="button" class="ghost small" id="pod-start">Start a pod</button>
+          <button type="button" class="ghost small" id="pod-stop" hidden>Stop the pod</button>
+          <button type="button" class="ghost small" id="pod-refresh">Refresh</button>
+          <span class="hint" id="pod-hint">A pod keeps every engine resident: no queue, no cold start, and it bills by the hour until it is stopped or reaches its cap.</span>
+        </div>
+      </div>
+
+      <div class="modes" id="modes" role="group" aria-label="Mode" hidden>
+        <button type="button" data-mode="clip" aria-pressed="true">Clip</button>
+        <button type="button" data-mode="live" aria-pressed="false">Live stream</button>
+        <button type="button" data-mode="segments" aria-pressed="false">Segments</button>
+      </div>
+      <p class="hint" id="mode-hint" hidden>Live streams run the fastvideo-rs models: a clip model (H3, LTX, Wan) as a clip queue, a causal one (SF-Wan, LongLive) as one continuous rollout, published to Cloudflare Stream and played here over WHEP.</p>
+
       <h2>Model</h2>
       <div class="modes" id="families" role="group" aria-label="Model family"></div>
       <div class="cards" id="models" role="group" aria-label="Model"></div>
@@ -86,6 +108,46 @@
           <div class="controls"><span class="label">What the worker ran</span><button type="button" class="ghost small" id="job-copy">Copy</button></div>
           <pre class="cmd" id="job-cmd"></pre>
         </div>
+      </section>
+
+      <section class="panel" id="live" aria-labelledby="live-h" hidden>
+        <div class="controls"><h2 id="live-h" style="flex:1">Live</h2><span class="summary" id="live-summary" aria-live="polite"></span></div>
+        <div class="screen">
+          <video id="live-video" autoplay playsinline muted controls></video>
+        </div>
+        <p class="hint" id="live-text" aria-live="polite">No stream.</p>
+        <label class="field"><span class="label" id="steer-label">Next prompt</span>
+          <textarea id="steer" maxlength="2000" style="min-height:64px" placeholder="Where the stream goes next"></textarea></label>
+        <div class="row" id="steer-seconds-row" hidden>
+          <label class="field"><span class="label">Clip length (seconds; blank: the session's default)</span><input id="steer-seconds" type="number" step="0.5" min="1" placeholder="e.g. 5"></label>
+        </div>
+        <div class="controls">
+          <button type="button" class="ghost small" id="live-steer" disabled>Switch prompt</button>
+          <button type="button" class="ghost small" id="live-pause" disabled>Pause</button>
+          <button type="button" class="ghost small" id="live-resume" disabled>Resume</button>
+          <button type="button" class="ghost small" id="live-reset" disabled>Reset (scene cut)</button>
+          <button type="button" class="ghost small" id="live-stop" disabled>Stop</button>
+        </div>
+        <p class="msg bad" id="live-err" hidden></p>
+      </section>
+
+      <section class="panel" id="segments" aria-labelledby="seg-h" hidden>
+        <div class="controls"><h2 id="seg-h" style="flex:1">Segments</h2><span class="summary" id="seg-summary" aria-live="polite"></span></div>
+        <div class="screen">
+          <video id="seg-video-a" playsinline controls></video>
+          <video id="seg-video-b" playsinline controls hidden></video>
+        </div>
+        <p class="hint" id="seg-text" aria-live="polite">No stream. Pick a fastvideo-rs model, write the first segment's prompt and press Next segment: each segment continues the one before it, and they play back to back.</p>
+        <div class="row">
+          <label class="field"><span class="label">Segment length (s)</span><input id="seg-seconds" type="number" step="0.5" min="0.5" max="30" value="6"></label>
+          <label class="field"><span class="label">Scene cut on the next segment</span><select id="seg-reset"><option value="">No: continue</option><option value="1">Yes: start afresh</option></select></label>
+        </div>
+        <div class="controls">
+          <button type="button" class="ghost small" id="seg-next" disabled>Next segment</button>
+          <button type="button" class="ghost small" id="seg-close" disabled>Close the stream</button>
+        </div>
+        <div class="history" id="seg-list"></div>
+        <p class="msg bad" id="seg-err" hidden></p>
       </section>
 
       <section class="panel" aria-labelledby="hist-h">

@@ -66,3 +66,139 @@ by fv-serve's metrics (its 4 steps + TAEH3 decode; the worker reports
 fv-serve's numbers, `decode_s` 0), execution 195.6 s, cold worker start
 170 s. With that, every engine of the catalog has produced a clip through
 the endpoint.
+
+## 2026-11-19 05:10 UTC: image `sha-ca445df` (Rust worker, one CUDA 13 runtime, SASS kernels)
+
+The image is 1.09 GB compressed (15 layers, ghcr manifest): ubuntu:22.04,
+the CUDA 13.4 libraries + cuDNN, fv-serve, llama-server, Ubuntu's ffmpeg,
+`h3 @ 697fb9a` and `fastwan @ fa6a318` built with `--features cuda-13` and
+loading their kernels as NVRTC-compiled SASS, `studio-worker` (Rust) as the
+entrypoint, no Python. Worker: RTX PRO 6000 Blackwell **Server** Edition,
+driver 595.112.07, compute capability 12.0, pod `f3q4rq4bbi50zx`.
+
+### `op: check` (the engines' conformance checkers on the card)
+
+| engine | result | time |
+|---|---|---|
+| `h3 check --backend cuda` | **all 180 checks pass** (tolerance 3e-2) | 17.4 s |
+| `fastwan check --backend cuda` | 63 / 66: the three VSA cases fail at rel 0.28 (`vsa (21, 17, 30) h2 d128`, `vsa (21, 30, 52) h1 d128` and the small d128 case) | |
+
+The fastwan failures are the known check-input problem, not a kernel bug and
+not CUDA 13's: fastwan-rs's `docs/runs/2026-11-18-vast-4090-upscale-everywhere`
+records the same three cases at rel 0.28–0.29 on an RTX 4090 under CUDA 12.8
+(random inputs rounded to bf16 by the upload flip top-k picks; the CPU oracle
+fed the rounded inputs moves 0.21–0.41 from its f32 self). The fix (bf16-
+representable inputs on both sides, fastwan-rs `e72ff08`, extended to the
+small d128 case) is on the fastwan-rs branch of zaitrarrio/fastwan-rs#7; the
+next image picks it up. Every other fastwan check, including the tiny DiT
+VSA / int8 / int4 rollouts, the causal rollouts and the upscaler, passes.
+So: **NVRTC 13.4 → SASS for sm_120 gives the same results as the CUDA 12.8
+PTX builds on both engines.**
+
+### `endpoint.py smoke` (cold worker each time: idle timeout 5 s)
+
+| job | result | stage | load | encode | denoise | decode | mux | execution |
+|---|---|---|---|---|---|---|---|---|
+| `h3-plug4` T2V 832×480×124, seed 7 | COMPLETED, MP4 832×480 124 fr H.264 + AAC 32 kHz (2.09 MB) | 56.5 s | 125.1 s | 0.1 s | 7.5 s (4 steps: 2.03 / 1.82 / 1.82 / 1.82) | 3.6 s | 4.8 s | 200.0 s |
+| `fastwan-1.3b` T2V 832×480×81, seed 7 | COMPLETED, MP4 832×480 81 fr (1.13 MB) | 134.7 s (R2 fetch of the FastWan tree) | 10.0 s | 1.3 s | 1.55 s (3 steps of 0.51–0.53 s) | 0.3 s | 0.2 s | 150.1 s |
+| `fasth3-4step-vsa-480p-taeh3` (fastvideo-rs) T2V 832×480×124, seed 7 | COMPLETED, MP4 832×480 124 fr H.264 + AAC (3.01 MB) | 0 s | 104.1 s (fv-serve) | 0.1 s | 6.2 s (fv-serve's metric: its 4 steps + TAEH3) | — | — | 115.5 s |
+
+All three MP4s downloaded and ffprobe-verified. The h3 load (125 s) now
+includes opening the Qwen3-VL encoder resident (h3-rs's 2026-11-18 text-
+encoder placement: `serve` opens it last, ~35 s on this card), so the prompt
+encodes in 0.13 s; the earlier image's h3 streamed the encoder per prompt
+(load 110 + encode 79 s). fastwan's 0.51 s
+step is fastwan-rs's 0.54 s on this card class; the fastvideo-rs H3 draft
+ran 6.2 s on the Server Edition against 36.1 s on the Workstation Edition
+pod of 00:30 (fv-serve load 104 against 156 s).
+
+### Prompt expansion (`options.prompt: balanced`), `h3-plug4` T2V 832×480×124, seed 7
+
+Job `92938c5f…`, cold worker. COMPLETED in 301 s wall (execution 294.8 s),
+MP4 832×480 124 frames H.264 + AAC 32 kHz (2.09 MB, ffprobe).
+
+| phase | time |
+|---|---|
+| staging the h3 trees | 55 s |
+| staging the GGUF tree `qwen3-vl-4b-instruct-gguf` from R2 (5.1 GB, first use on this worker) | 82 s |
+| llama-server start + the rewrite + `h3 serve` load (resident encoder) | 139 s (`load_s` 137.1) |
+| h3 encode / denoise (4 steps) / decode / mux | 1.0 / 7.5 (2.05, 1.82, 1.82, 1.83) / 3.7 / 3.2 s |
+
+The job's `expanded_prompt` (Qwen3-VL-4B through the H3 "balanced" system
+prompt ported from fastvideo-rs), passed to `h3 generate` as its `--prompt`:
+
+> integrated_multimodal_description: A red fox with glossy russet fur and
+> white chest trots through untouched snow, paws crunching softly; dawn light
+> glows pale gold through pine branches. The fox glances left, ears twitching,
+> nose twitching. \<d\>The fox sniffs the air.\</d\> Close-up, low-angle
+> tracking shot, shallow depth of field, golden-hour backlighting, cinematic
+> realism.
+> overall_soundscape: Distant pine rustle, crunching snow, faint birdsong.
+> non_diegetic_music: None.
+
+That is the H3 multimodal format FastVideo's pipeline expects (description
+with a `<d>` dialogue tag, soundscape, music line). The GGUF staging and the
+sidecar start are paid once per worker; on a warm worker the rewrite is the
+only extra cost (not yet measured separately: the worker's `load_s` folds the
+sidecar start and the rewrite into the h3 load).
+
+## 2026-11-19 05:40 UTC: image `sha-f52591f` (fastwan at `b50c842`, the check-input fix)
+
+Same image otherwise (1.09 GB compressed). Worker this time: RTX PRO 6000
+Blackwell **Workstation** Edition, driver 595.112.07.
+
+| engine | result | time |
+|---|---|---|
+| `fastwan check --backend cuda` | **all 66 checks pass** (tolerance 3e-2): the three VSA cases now at rel 2.4e-3 / 2.9e-3 / 2.8e-3 | 34.5 s |
+| `h3 check --backend cuda` | **all 180 checks pass** | 16.0 s |
+
+So the third failing case of `sha-ca445df` was the small `vsa (5, 6, 9) h2
+d128` one, as guessed, and both engines' conformance suites are green on
+CUDA 13.4 with NVRTC-compiled SASS on both Blackwell editions. This is the
+image the endpoint runs.
+
+## 2026-11-19 13:35 UTC: one fv-serve per process group (image `sha-db8ffb0`)
+
+Two fastvideo-engine jobs of different H3 models submitted 3 s apart, so
+the second queued behind the first on the same worker (RTX PRO 6000 Server
+Edition):
+
+| job | stage | load (`load_s`) | denoise | `total_s` | execution | queue delay |
+|---|---|---|---|---|---|---|
+| `fasth3-4step-vsa-480p-taeh3` T2V 832×480×124, seed 7 | 0.02 s | 159.7 s (fv-serve started for the `h3` group with this model resident) | 41.4 s (fv-serve's metric: 4 steps + TAEH3) | 203.9 s | 205.5 s | 177 s (cold worker) |
+| `sol-h3`, same prompt and seed | 0.02 s | **0** (the group's fv-serve kept) | 38.9 s | 151.3 s | 152.7 s | 380 s (behind job 1) |
+
+Before this change the second job restarted fv-serve and paid its load
+again. Now the process stays and fv-serve loads `sol-h3` on demand inside
+it (`[engine] swap = true`): that on-demand load is the ~110 s between the
+second job's `denoise_s` and its `total_s`, which the worker's timings do
+not name (fv-serve reports `load_s` only for the process start). The saving
+against a restart is the process start and the model's `resident` load
+path, about 50 s here; the real win is in the pod mode, where the group's
+models stay loaded across jobs (`docs/runs/2026-11-19-runpod-6000w-pod-mode`).
+
+## 2026-11-20 07:10 UTC: image `sha-91c0ff4` (the `prompt_expansion` alias), Worker redeployed
+
+A fastvideo-rs job from the page failed with `model ltx25-distill-dense has
+no option 'prompt_expansion'`: the Worker deployed on 2026-11-18 bundles
+that day's catalog, whose fastvideo models had fv-serve's
+`fv.prompt_expansion` knob (default `disabled`, sent with every job), while
+the endpoint had moved to `sha-db8ffb0`, whose catalog knows only the
+shared `expand.prompt`. Two fixes, both applied:
+
+- The worker accepts the old name (`KNOB_ALIASES`: `prompt_expansion` /
+  `fv.prompt_expansion` → `expand.prompt`, `disabled` → `off`; 91c0ff4).
+  The endpoint `wusgagr2t5am6d` was moved to `sha-91c0ff4` with
+  `PATCH /v2/serverless/{id}` (`image` + the same `env` with `STUDIO_IMAGE`
+  updated; the `{{ RUNPOD_SECRET_* }}` references unchanged).
+- The Studio Worker was redeployed from 169681d (`npx wrangler@4 deploy`,
+  version `49abf767`): `/api/catalog` now lists `expand.prompt` on
+  `ltx25-distill-dense` and no `prompt_expansion` knob. The Worker's
+  secrets are `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`, `STUDIO_TOKEN`; the
+  Cloudflare Stream pair for live streams is not set yet.
+
+Probe on the moved endpoint (no model load: validation runs first):
+`{"engine":"fastvideo","model":"ltx25-distill-dense","options":{"prompt_expansion":"disabled","nope":1}}`
+→ `FAILED in 6.5 s (delay 4143 ms, execution 229 ms)`, error
+`model ltx25-distill-dense has no option 'nope'`: the old name passed the
+alias, and only the bogus option was refused.

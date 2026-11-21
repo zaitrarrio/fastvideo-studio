@@ -19,6 +19,8 @@ from . import __version__, gpu, mux
 from .catalog import Catalog, Job
 from .engines import Ctx, RunResult, fastvideo, fastwan, h3
 from .errors import JobError
+from . import media as md, upsampler as up
+from .sidecar import Sidecar
 from .flags import EngineSettings
 from .progress import Reporter
 from .r2 import LocalStore, ObjectStore, R2Config, R2Store
@@ -44,8 +46,9 @@ class Config:
     fv_config: str = "/opt/studio/configs/fastvideo.toml"
     fv_state_dir: str = "/workspace/fv-state"
     jobs_dir: Path = Path("/workspace/jobs")
-    ports: dict[str, int] = field(default_factory=lambda: {"h3": 7861, "fastwan": 7862, "fastvideo": 8000})
-    cuda12_lib: str = "/opt/cuda12/lib"
+    ports: dict[str, int] = field(default_factory=lambda: {"h3": 7861, "fastwan": 7862, "fastvideo": 8010, "upsampler": up.DEFAULT_PORT})  # not 8000: the serve mode listens there on a pod
+    llama_bin: str = up.LLAMA_BIN
+    cuda12_lib: str = ""  # a separate CUDA runtime for h3 / fastwan; empty since the one-runtime image
     backend: str = "cuda"
     synthetic: bool = False
     fv_fake: bool = False
@@ -63,6 +66,7 @@ class Config:
         c.bin_dir = Path(e.get("STUDIO_BIN_DIR", str(c.bin_dir)))
         c.fv_serve_bin = e.get("STUDIO_FV_SERVE", c.fv_serve_bin)
         c.fv_config = e.get("STUDIO_FV_CONFIG", c.fv_config)
+        c.llama_bin = e.get("STUDIO_LLAMA_SERVER", c.llama_bin)
         c.fv_state_dir = e.get("STUDIO_FV_STATE_DIR", c.fv_state_dir)
         c.jobs_dir = Path(e.get("STUDIO_JOBS_DIR", str(c.jobs_dir)))
         for eng, var in (("h3", "STUDIO_H3_PORT"), ("fastwan", "STUDIO_FASTWAN_PORT"), ("fastvideo", "STUDIO_FV_PORT")):
@@ -130,11 +134,16 @@ class Worker:
     def env_for(self, engine: str) -> dict[str, str]:
         env = dict(os.environ)
         if engine in ("h3", "fastwan"):
-            # The 12.8 runtime from the nvidia-*-cu12 wheels, ahead of the image's 13.4.
-            env["LD_LIBRARY_PATH"] = self.cfg.cuda12_lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+            if self.cfg.cuda12_lib:  # STUDIO_CUDA12_LIB: a separate runtime ahead of the image's
+                env["LD_LIBRARY_PATH"] = self.cfg.cuda12_lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
         else:
             env["FV_WEIGHTS"] = str(self.roots.link_root)
             env["FV_STATE_DIR"] = self.cfg.fv_state_dir
+            # fv-serve's artifact URLs: loopback, never the public base it
+            # discovers (on a Runpod pod it builds
+            # https://<pod>-<its port>.proxy.runpod.net/files/..., which 404s
+            # for any port but the exposed one).
+            env["FV_PUBLIC_BASE_URL"] = f"http://127.0.0.1:{self.cfg.ports.get('fastvideo', 8010)}"
             env.setdefault("RUST_LOG", "info")
         return env
 
@@ -154,6 +163,8 @@ class Worker:
                 return self.generate(str(job.get("id") or f"local-{int(time.time())}"), inp, progress)
             if op == "r2":
                 return self.r2check()
+            if op == "check":
+                return self.check(inp)
             raise JobError("validate", f"unknown op {op!r}")
         except JobError as e:
             self.log(f"job failed ({e.where}): {e.message}")
@@ -165,6 +176,67 @@ class Worker:
             sc = self.sidecars.get(str(inp.get("engine") or ""))
             tail = sc.tail(50) if sc is not None else []
             return JobError("engine", f"{type(e).__name__}: {e}", tail[-50:]).to_output()
+
+    def expand_prompt(self, job: Job, job_dir: Path, report: Reporter) -> str | None:
+        """Prompt expansion (the `expand.prompt` knob) for every engine through
+        the llama-server sidecar (Qwen3-VL-4B-Instruct, fetched from R2 on
+        first use). Returns the rewritten prompt, or None when off or when
+        anything failed: a failed rewrite never fails the job."""
+        mode = up.mode_of(job)
+        if mode == "off" or not job.prompt.strip():
+            return None
+        try:
+            report("staging", "prompt expansion model", force=True)
+            self.weights.ensure_tree(up.TREE)
+            tree_dir = str(self.roots.link_root / up.TREE_NAME)
+            port = self.cfg.ports.get("upsampler", up.DEFAULT_PORT)
+            argv, env = up.plan_sidecar(self.cfg.llama_bin, tree_dir, port, env=self.env_for("fastvideo"))
+            key = up.sidecar_key(tree_dir, port)
+            base = up.base_url(port)
+            self.sidecars.ensure(up.ENGINE, key, lambda: Sidecar(up.ENGINE, key, argv, env, up.llama_probe(base)),
+                                 up.VRAM_GIB, lambda st, t: report("loading", f"prompt expansion {t:.0f} s"))
+            image_b64 = image_mime = None
+            first = job.inputs.get("first_image")
+            if first is not None and job.task in ("i2v", "fl2v"):
+                lm = md.fetch_media(first, job_dir / "in", "first_image", self.store, self.bucket)
+                image_b64, image_mime = up.image_data_b64(str(lm.path)), lm.mime
+            u = up.Upsampler(base, vision=True, log=self.log)
+            report("encoding", "expanding the prompt", force=True)
+            new = u.expand(job.prompt, job.model.family, mode, negative=job.negative_prompt,
+                           image_b64=image_b64, image_mime=image_mime or "image/jpeg", timeout_s=90)
+            if u.last_error is None and new.strip() and new != job.prompt:
+                job.prompt = new
+                return new
+            return None
+        except Exception as e:  # noqa: BLE001
+            self.log(f"[upsampler] prompt expansion unavailable ({type(e).__name__}: {e}); generating with the original prompt")
+            return None
+
+    def check(self, inp: dict) -> dict:
+        """`op: check`: the engines' own conformance checkers on this card
+        (`h3 check --backend cuda`, `fastwan check --backend cuda`): every op
+        against the CPU reference, the way the engines' CLAUDE.md trusts GPU
+        code. Stops the sidecars first (the checkers want the GPU)."""
+        engines = inp.get("engines") or ["h3", "fastwan"]
+        self.sidecars.stop_all()
+        out: dict = {"op": "check", "backend": self.cfg.backend, "results": {}}
+        for name in engines:
+            if name not in ("h3", "fastwan"):
+                out["results"][name] = {"error": "no checker for this engine"}
+                continue
+            argv = [str(self.cfg.bin_dir / name), "check", "--backend", self.cfg.backend]
+            t0 = time.time()
+            try:
+                r = subprocess.run(argv, capture_output=True, text=True, timeout=float(inp.get("timeout_s", 1800)), env=self.env_for(name))
+                lines = (r.stdout + r.stderr).strip().splitlines()
+                out["results"][name] = {"exit": r.returncode, "seconds": round(time.time() - t0, 1),
+                                        "tail": lines[-40:], "command": " ".join(argv)}
+            except Exception as e:  # noqa: BLE001
+                out["results"][name] = {"error": f"{type(e).__name__}: {e}", "command": " ".join(argv)}
+        g = gpu.query()
+        out["gpu"] = g.name if g else None
+        out["driver"] = g.driver if g else None
+        return out
 
     def r2check(self) -> dict:
         """`op: r2`: can this worker write the Studio bucket and read the
@@ -218,6 +290,9 @@ class Worker:
             "catalog_version": self.catalog.version,
             "versions": self.versions(),
             "sidecars": self.sidecars.resident(),
+            "upsampler": {"model": up.ALIAS, "tree": up.TREE_NAME, "port": self.cfg.ports.get("upsampler", up.DEFAULT_PORT),
+                          "vram_gib": up.VRAM_GIB, "resident": up.ENGINE in self.sidecars.sidecars,
+                          "binary": os.path.exists(self.cfg.llama_bin)},
             "trees": trees,
             "staged": sorted(p.name for p in self.roots.stage_dir.iterdir()) if self.roots.stage_dir.is_dir() else [],
             "volume": {"path": str(self.roots.volume), "mounted": self.roots.volume.is_dir(),
@@ -304,10 +379,12 @@ class Worker:
         try:
             report("staging", force=True)
             staged = self.weights.ensure_model(job.model.trees, job.model.stage, lambda d: report("staging", d))
+            original_prompt = job.prompt
+            expanded = self.expand_prompt(job, job_dir, report)
             ctx = self._ctx(job, job_dir, report)
             res = DRIVERS[job.engine](ctx, job)
             res.timings.stage_s = staged["stage_s"]
-            out = self._finish(job_id, job, res, job_dir, report, t_start)
+            out = self._finish(job_id, job, res, job_dir, report, t_start, original_prompt=original_prompt, expanded_prompt=expanded)
             self.jobs_done += 1
             return out
         finally:
@@ -320,10 +397,11 @@ class Worker:
             env={e: self.env_for(e) for e in ("h3", "fastwan", "fastvideo")}, job_dir=job_dir,
             store=self.store, bucket=self.bucket, log=self.log, report=report,
             fv_serve_bin=self.cfg.fv_serve_bin, fv_config=self.cfg.fv_config, fv_state_dir=self.cfg.fv_state_dir,
-            fv_weights=str(self.roots.link_root), fv_fake=self.cfg.fv_fake,
+            fv_weights=str(self.roots.link_root), fv_fake=self.cfg.fv_fake, models=self.catalog.models,
         )
 
-    def _finish(self, job_id: str, job: Job, res: RunResult, job_dir: Path, report: Reporter, t_start: float) -> dict:
+    def _finish(self, job_id: str, job: Job, res: RunResult, job_dir: Path, report: Reporter, t_start: float, *,
+                original_prompt: str | None = None, expanded_prompt: str | None = None) -> dict:
         # ---- mux
         report("muxing", force=True)
         mp4 = job_dir / "video.mp4"
@@ -357,6 +435,7 @@ class Worker:
             "worker": {"gpu": g.name if g else None, "driver": g.driver if g else None,
                        "image": self.cfg.image or os.environ.get("RUNPOD_IMAGE", "")},
             "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expanded_prompt": expanded_prompt,
             "client": job.client,
         }
         if self.store is None or not self.bucket:
@@ -372,7 +451,7 @@ class Worker:
             urls["thumbnail_url"] = self.store.presign_get(self.bucket, prefix + "thumb.jpg", self.cfg.url_ttl_s)
             output.update(urls)
             meta = job_dir / "job.json"
-            meta.write_text(json.dumps({"id": job_id, "input": _redact_input(job), "output": output}, indent=1))
+            meta.write_text(json.dumps({"id": job_id, "input": _redact_input(job, original_prompt), "output": output}, indent=1))
             self.store.put_file(self.bucket, prefix + "job.json", meta, "application/json")
         except JobError:
             raise
@@ -386,14 +465,15 @@ def _safe(s: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in s)[:120] or "job"
 
 
-def _redact_input(job: Job) -> dict:
-    """The validated request without inline media bytes."""
+def _redact_input(job: Job, original_prompt: str | None = None) -> dict:
+    """The validated request without inline media bytes (the prompt as sent,
+    before any expansion)."""
     inputs = {}
     for k, v in job.inputs.items():
         if isinstance(v, list):
             inputs[k] = [{"kind": m.kind, "value": m.value if m.kind != "b64" else f"<{m.inline_bytes} bytes>"} for m in v]
         else:
             inputs[k] = {"kind": v.kind, "value": v.value if v.kind != "b64" else f"<{v.inline_bytes} bytes>"}
-    return {"engine": job.engine, "model": job.model.id, "task": job.task, "prompt": job.prompt,
+    return {"engine": job.engine, "model": job.model.id, "task": job.task, "prompt": original_prompt if original_prompt is not None else job.prompt,
             "negative_prompt": job.negative_prompt, "width": job.width, "height": job.height, "frames": job.frames,
             "seed": job.seed, "options": job.explicit, "upscale": job.upscale, "inputs": inputs, "client": job.client}

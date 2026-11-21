@@ -195,9 +195,9 @@ def test_fastvideo_bodies(catalog):
     b = flags.fastvideo_body(j, catalog.knobs, {"video": "https://e/v.mp4"}, 1)
     assert b["video_url"] == "https://e/v.mp4" and b["start_s"] == 0.0 and b["end_s"] == pytest.approx(49 / 24, abs=1e-3)
     assert "size" not in b and "num_frames" not in b and "fps" not in b
-    j = catalog.validate({"engine": "fastvideo", "model": "h3-ref2v-turbo", "task": "ref2v", "prompt": "P", "inputs": {"references": [{"url": "https://e/a.png"}]}, "options": {"reference_strength": 0.5, "prompt_expansion": "quality"}})
+    j = catalog.validate({"engine": "fastvideo", "model": "h3-ref2v-turbo", "task": "ref2v", "prompt": "P", "inputs": {"references": [{"url": "https://e/a.png"}]}, "options": {"reference_strength": 0.5}})
     b = flags.fastvideo_body(j, catalog.knobs, {"references": ["https://e/a.png"]}, None)
-    assert b["reference_urls"] == ["https://e/a.png"] and b["reference_strength"] == 0.5 and b["prompt_expansion"] == "quality"
+    assert b["reference_urls"] == ["https://e/a.png"] and b["reference_strength"] == 0.5 and "prompt_expansion" not in b
     assert set(b) <= flags.FV_FIELDS
 
 

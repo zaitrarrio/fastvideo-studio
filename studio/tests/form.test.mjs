@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import catalog from "../../catalog/catalog.json" with { type: "json" };
 import { modelById, modelsForFamily, families, knobName } from "../web/js/catalog.js";
 import { knobDefaults, knobVisible, buildOptions, buildRequest, cliLine, frameLabel, sizeLabel, aspectLabel, shellQuote, missingInputs, upscaleOf, hintFor } from "../web/js/form.js";
+import { aspectOf, apiRatio } from "../web/js/player.js";
 
 const v2 = modelById(catalog, "fasth3-v2");
 const base = modelById(catalog, "h3");
@@ -56,13 +57,15 @@ describe("knob defaults and `when`", () => {
   test("options use short names, drop hidden knobs and the upscale knob", () => {
     const d = knobDefaults(catalog, v2);
     const o = buildOptions(catalog, v2, d);
-    assert.deepEqual(o, { weights: "mxfp8", decoder_weights: "mxfp8", vsa_qk8: true, pv8: true, attention: "auto", stream_blocks: false, tables: true, preview: false });
+    assert.deepEqual(o, { weights: "mxfp8", decoder_weights: "mxfp8", vsa_qk8: true, pv8: true, attention: "auto", stream_blocks: false, tables: true, preview: false, prompt: "off" });
     const vsa = buildOptions(catalog, v2, { ...d, "h3.attention": "vsa", "h3.vsa_sparsity": "0.85", "h3.dense_first_steps": "2" });
     assert.equal(vsa.vsa_sparsity, 0.85);
     assert.equal(vsa.dense_first_steps, 2);
     assert.equal(upscaleOf(v2, { ...d, "h3.upscale_factor": "2" }), 2);
     assert.equal(upscaleOf(v2, d), 0);
-    assert.deepEqual(buildOptions(catalog, wan, knobDefaults(catalog, wan)), { prompt_expansion: "disabled" }, "null defaults are not sent");
+    // `expand.prompt` is the one knob every model lists (short name `prompt`, default off).
+    assert.deepEqual(buildOptions(catalog, wan, knobDefaults(catalog, wan)), { prompt: "off" }, "null defaults are not sent");
+    assert.equal(o.prompt, "off");
   });
 });
 
@@ -96,7 +99,7 @@ describe("the job input", () => {
     const req = buildRequest(catalog, v2, state(v2), { studio: "test", job: "j1" });
     assert.deepEqual(req, {
       op: "generate", engine: "h3", model: "fasth3-v2", task: "t2v", prompt: "A red fox", width: 1344, height: 768, frames: 124, seed: 7,
-      inputs: {}, options: { weights: "mxfp8", decoder_weights: "mxfp8", vsa_qk8: true, pv8: true, attention: "auto", stream_blocks: false, tables: true, preview: false },
+      inputs: {}, options: { weights: "mxfp8", decoder_weights: "mxfp8", vsa_qk8: true, pv8: true, attention: "auto", stream_blocks: false, tables: true, preview: false, prompt: "off" },
       upscale: 0, client: { studio: "test", job: "j1" },
     });
   });
@@ -176,11 +179,28 @@ describe("the command line", () => {
     const line = cliLine(catalog, wan, buildRequest(catalog, wan, st), st);
     assert.match(line, /^curl -X POST http:\/\/127\.0\.0\.1:8080\/fv\/v1\/jobs -H 'Content-Type: application\/json' -d '/);
     const body = JSON.parse(line.slice(line.indexOf("-d '") + 4, -1));
-    assert.deepEqual(body, { model: "wan22-ti2v-5b", prompt: "A red fox", negative_prompt: "blurry", width: 1280, height: 704, num_frames: 121, seed: 7, steps: 40, guidance: 5, prompt_expansion: "disabled", image_url: "https://…/a.png" });
+    assert.deepEqual(body, { model: "wan22-ti2v-5b", prompt: "A red fox", negative_prompt: "blurry", width: 1280, height: 704, num_frames: 121, seed: 7, steps: 40, guidance: 5, image_url: "https://…/a.png" });
     const ltx = modelById(catalog, "ltx25-distill-sol");
     const ls = state(ltx);
     const lb = JSON.parse(cliLine(catalog, ltx, buildRequest(catalog, ltx, ls), ls).split("-d '")[1].slice(0, -1));
     assert.equal(lb.fps, 24);
     assert.equal(lb.num_frames, 121);
+  });
+});
+
+describe("aspect ratios", () => {
+  test("the CSS box and fv-serve's aspect_ratio are different strings", () => {
+    // The sessions (live streams, segments) sent the CSS form and fv-serve
+    // refused it: `invalid aspect ratio \`1344 / 768\`; expected W:H`.
+    assert.equal(aspectOf(1344, 768), "1344 / 768");
+    assert.equal(apiRatio(1344, 768), "7:4");
+    assert.equal(apiRatio(1280, 720), "16:9");
+    assert.equal(apiRatio(832, 480), "26:15");
+    assert.equal(apiRatio(768, 1344), "4:7");
+    assert.equal(apiRatio(512, 512), "1:1");
+    assert.equal(apiRatio(0, 0), "16:9");
+    for (const [w, h] of [[1344, 768], [832, 480], [1280, 720], [512, 512]]) {
+      assert.match(apiRatio(w, h), /^[1-9][0-9]*:[1-9][0-9]*$/);
+    }
   });
 });

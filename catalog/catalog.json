@@ -433,12 +433,22 @@
    "group": "output",
    "field": "fps"
   },
-  "fv.prompt_expansion": {
+  "fv.reference_strength": {
+   "label": "Reference strength",
+   "type": "float",
+   "min": 0.0,
+   "max": 1.5,
+   "step": 0.05,
+   "default": 1.0,
+   "group": "quality",
+   "field": "reference_strength"
+  },
+  "expand.prompt": {
    "label": "Prompt expansion",
    "type": "select",
    "options": [
     [
-     "disabled",
+     "off",
      "Off"
     ],
     [
@@ -450,20 +460,9 @@
      "Quality"
     ]
    ],
-   "default": "disabled",
+   "default": "off",
    "group": "quality",
-   "help": "The serve-side Qwen3-VL upsampler (needs the sidecar).",
-   "field": "prompt_expansion"
-  },
-  "fv.reference_strength": {
-   "label": "Reference strength",
-   "type": "float",
-   "min": 0.0,
-   "max": 1.5,
-   "step": 0.05,
-   "default": 1.0,
-   "group": "quality",
-   "field": "reference_strength"
+   "help": "Rewrite the prompt with Qwen3-VL-4B (llama-server sidecar) in the model family's prompt style before generating: Balanced keeps it short, Quality is richer (H3: per-shot blocks). Adds ~6 GB of VRAM beside the engine and a 5 GB fetch on first use; the rewritten prompt comes back as expanded_prompt."
   }
  },
  "models": [
@@ -538,7 +537,8 @@
     "h3.stream_blocks",
     "h3.tables",
     "h3.preview",
-    "h3.upscale_factor"
+    "h3.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "fasth3-v2",
@@ -642,7 +642,8 @@
     "h3.stream_blocks",
     "h3.tables",
     "h3.preview",
-    "h3.upscale_factor"
+    "h3.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "fasth3-v1",
@@ -743,7 +744,8 @@
     "h3.stream_blocks",
     "h3.tables",
     "h3.preview",
-    "h3.upscale_factor"
+    "h3.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "h3-plug4",
@@ -847,7 +849,8 @@
     "h3.tables",
     "h3.preview",
     "h3.upscale_factor",
-    "h3.adapter_strength"
+    "h3.adapter_strength",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "h3-turbo4",
@@ -943,7 +946,8 @@
     "h3.tables",
     "h3.preview",
     "h3.upscale_factor",
-    "h3.adapter_strength"
+    "h3.adapter_strength",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "h3-turbo4-ref",
@@ -1040,7 +1044,8 @@
     "h3.stream_blocks",
     "h3.preview",
     "h3.upscale_factor",
-    "h3.adapter_strength"
+    "h3.adapter_strength",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "h3-turbo8",
@@ -1135,7 +1140,8 @@
     "h3.stream_blocks",
     "h3.preview",
     "h3.upscale_factor",
-    "h3.adapter_strength"
+    "h3.adapter_strength",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "h3-turbo8-ref",
@@ -1234,7 +1240,8 @@
     "h3.tables",
     "h3.preview",
     "h3.upscale_factor",
-    "h3.steps"
+    "h3.steps",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "h3",
@@ -1340,7 +1347,8 @@
     "h3.preview",
     "h3.upscale_factor",
     "h3.steps",
-    "h3.adapter_strength"
+    "h3.adapter_strength",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "h3-cfg",
@@ -1441,7 +1449,8 @@
     "h3.stream_blocks",
     "h3.tables",
     "h3.preview",
-    "h3.upscale_factor"
+    "h3.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "fasth3-omni",
@@ -1538,7 +1547,8 @@
     "h3.dense_first_steps",
     "h3.stream_blocks",
     "h3.preview",
-    "h3.upscale_factor"
+    "h3.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "fasth3-trim",
@@ -1624,7 +1634,8 @@
     "h3.stream_blocks",
     "h3.tables",
     "h3.preview",
-    "h3.upscale_factor"
+    "h3.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "pika-flex",
@@ -1689,7 +1700,8 @@
    "knobs": [
     "h3.weights",
     "h3.pv8",
-    "h3.stream_blocks"
+    "h3.stream_blocks",
+    "expand.prompt"
    ],
    "recipe": {
     "variant": "regen-2k",
@@ -1766,7 +1778,8 @@
     "fw.attention",
     "fw.vsa_sparsity",
     "fw.tae_chunk",
-    "fw.upscale_factor"
+    "fw.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "model_dir": "/workspace/w/fastwan",
@@ -1828,7 +1841,8 @@
    "knobs": [
     "fw.cache_frames",
     "fw.sink_frames",
-    "fw.upscale_factor"
+    "fw.upscale_factor",
+    "expand.prompt"
    ],
    "recipe": {
     "transformer": "/workspace/w/fastwan-public/self-forcing-1.3b-f16.safetensors",
@@ -1896,7 +1910,8 @@
    "knobs": [
     "fw.cache_frames",
     "fw.sink_frames",
-    "fw.upscale_factor"
+    "fw.upscale_factor",
+    "expand.prompt"
    ],
    "knob_defaults": {
     "fw.cache_frames": 21
@@ -1987,10 +2002,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-4step-vsa"
+    "variant": "fasth3-4step-vsa",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2065,10 +2081,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "sol-h3"
+    "variant": "sol-h3",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2130,10 +2147,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-4step-vsa-480p-taeh3"
+    "variant": "fasth3-4step-vsa-480p-taeh3",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2206,11 +2224,12 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion",
-    "fv.reference_strength"
+    "fv.reference_strength",
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "h3-ref2v-turbo"
+    "variant": "h3-ref2v-turbo",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2282,11 +2301,12 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion",
-    "fv.reference_strength"
+    "fv.reference_strength",
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "h3-ref2v-max"
+    "variant": "h3-ref2v-max",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2358,10 +2378,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-trim-nvfp4"
+    "variant": "fasth3-trim-nvfp4",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2433,10 +2454,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "fasth3-v2-nvfp4"
+    "variant": "fasth3-v2-nvfp4",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2509,10 +2531,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "h3-lightx2v-turbo"
+    "variant": "h3-lightx2v-turbo",
+    "process": "h3"
    },
    "trees": [
     "weights/h3-base",
@@ -2593,10 +2616,11 @@
    },
    "knobs": [
     "fv.fps",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-distill-sol"
+    "variant": "ltx25-distill-sol",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25"
@@ -2677,10 +2701,11 @@
    },
    "knobs": [
     "fv.fps",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-distill-dense"
+    "variant": "ltx25-distill-dense",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25"
@@ -2761,10 +2786,11 @@
    },
    "knobs": [
     "fv.fps",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-distill-sol-nvfp4-taehv"
+    "variant": "ltx25-distill-sol-nvfp4-taehv",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25",
@@ -2823,11 +2849,12 @@
    },
    "knobs": [
     "fv.fps",
-    "fv.prompt_expansion",
-    "fv.reference_strength"
+    "fv.reference_strength",
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-ref2v"
+    "variant": "ltx25-ref2v",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25",
@@ -2905,10 +2932,11 @@
    "knobs": [
     "fv.fps",
     "fv.guidance",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "ltx25-a2v-guided"
+    "variant": "ltx25-a2v-guided",
+    "process": "ltx"
    },
    "trees": [
     "weights/ltx25",
@@ -2975,10 +3003,11 @@
    },
    "knobs": [
     "fv.steps",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "fastwan22-ti2v-5b"
+    "variant": "fastwan22-ti2v-5b",
+    "process": "ti2v-5b"
    },
    "trees": [
     "weights/fastwan22-ti2v-5b"
@@ -3046,10 +3075,11 @@
    "knobs": [
     "fv.steps",
     "fv.guidance",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "wan22-ti2v-5b"
+    "variant": "wan22-ti2v-5b",
+    "process": "ti2v-5b"
    },
    "trees": [
     "weights/wan22-ti2v-5b"
@@ -3116,10 +3146,11 @@
    },
    "knobs": [
     "fv.steps",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "fastwan22-ti2v-5b-taehv"
+    "variant": "fastwan22-ti2v-5b-taehv",
+    "process": "ti2v-5b"
    },
    "trees": [
     "weights/fastwan22-ti2v-5b",
@@ -3167,10 +3198,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "wan14b-plug-4step"
+    "variant": "wan14b-plug-4step",
+    "process": "wan14b"
    },
    "trees": [
     "weights/wan21-t2v-14b",
@@ -3220,10 +3252,11 @@
    },
    "knobs": [
     "fv.steps",
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "fastwan21-1.3b"
+    "variant": "fastwan21-1.3b",
+    "process": "fastwan21"
    },
    "trees": [
     "weights/fastwan21-1.3b"
@@ -3269,10 +3302,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "sfwan21-1.3b"
+    "variant": "sfwan21-1.3b",
+    "process": "streaming"
    },
    "trees": [
     "weights/sfwan21-1.3b",
@@ -3319,10 +3353,11 @@
     ]
    },
    "knobs": [
-    "fv.prompt_expansion"
+    "expand.prompt"
    ],
    "recipe": {
-    "variant": "longlive-1.3b"
+    "variant": "longlive-1.3b",
+    "process": "streaming"
    },
    "trees": [
     "weights/sfwan21-1.3b",

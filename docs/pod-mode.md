@@ -63,6 +63,13 @@ route (`STUDIO_SERVE_NO_AUTH=1` only for tests).
 | `POST /streams`, `GET /streams/{id}`, `POST /streams/{id}/commands`, `DELETE /streams/{id}` | phase 2: fv-serve's `/fv/v1/streams` on the model's process group, `output.kind = cloudflare`; the page gets `playback.whep_url` |
 | `POST /segments`, `GET /segments/{id}`, `GET` / `DELETE /segments/streams/{id}` | phase 3: fv-serve's `/v1/segments`; a finished segment's MP4 is uploaded to R2 and answered as a presigned `video_url` |
 
+fv-serve gets `FV_PUBLIC_BASE_URL=http://127.0.0.1:<its port>`: left to
+itself it discovers the pod's public base and hands back
+`https://<pod>-<its port>.proxy.runpod.net/files/...`, which only the one
+exposed port answers (and which would fetch the worker's own artifacts over
+the internet). The worker is fv-serve's only client and reads them over
+loopback.
+
 A stream or a segment session stages the model's trees before it starts
 fv-serve, exactly as a job does (`fastvideo_serve`): fv-serve loads its
 resident model at start, and without the weights that load fails and its

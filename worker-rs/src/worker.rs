@@ -245,6 +245,19 @@ impl Worker {
                 self.roots.link_root.to_string_lossy().into_owned(),
             );
             env.insert("FV_STATE_DIR".into(), self.cfg.fv_state_dir.clone());
+            // fv-serve's artifact URLs: loopback, never the public base it
+            // discovers. On a Runpod pod it builds
+            // `https://<pod>-<its port>.proxy.runpod.net/files/...`, which
+            // 404s for any port but the one exposed one and sends the
+            // worker's own download out over the internet (2026-11-21: the
+            // first clip job on a pod with fv-serve off port 8000).
+            env.insert(
+                "FV_PUBLIC_BASE_URL".into(),
+                format!(
+                    "http://127.0.0.1:{}",
+                    self.cfg.ports.get("fastvideo").copied().unwrap_or(8010)
+                ),
+            );
             env.entry("RUST_LOG".into())
                 .or_insert_with(|| "info".into());
         }
@@ -1109,6 +1122,32 @@ mod tests {
             Some("/workspace/w/h3-rs/assets/realesr-animevideov3.safetensors")
         );
         assert_eq!(c.llama_bin, up::LLAMA_BIN);
+    }
+
+    #[test]
+    fn fv_serve_gets_a_loopback_public_base_on_its_own_port() {
+        let dir = crate::tempdir("worker-fvbase");
+        let e: EnvMap = [
+            ("STUDIO_R2_LOCAL_DIR", dir.join("r2").to_str().unwrap()),
+            ("STUDIO_VOLUME", dir.join("vol").to_str().unwrap()),
+            ("STUDIO_JOBS_DIR", dir.join("jobs").to_str().unwrap()),
+            ("STUDIO_FV_PORT", "8777"),
+            (
+                "STUDIO_CATALOG",
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../catalog/catalog.json")
+                    .to_str()
+                    .unwrap(),
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let w = Worker::from_env_map(&e, crate::null_log()).unwrap();
+        let fv = w.env_for("fastvideo");
+        assert_eq!(fv["FV_PUBLIC_BASE_URL"], "http://127.0.0.1:8777");
+        // h3 and fastwan serve their own files; the knob is fv-serve's only.
+        assert!(!w.env_for("h3").contains_key("FV_PUBLIC_BASE_URL"));
     }
 
     #[test]

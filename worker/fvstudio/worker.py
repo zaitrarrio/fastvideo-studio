@@ -139,6 +139,11 @@ class Worker:
         else:
             env["FV_WEIGHTS"] = str(self.roots.link_root)
             env["FV_STATE_DIR"] = self.cfg.fv_state_dir
+            # fv-serve's artifact URLs: loopback, never the public base it
+            # discovers (on a Runpod pod it builds
+            # https://<pod>-<its port>.proxy.runpod.net/files/..., which 404s
+            # for any port but the exposed one).
+            env["FV_PUBLIC_BASE_URL"] = f"http://127.0.0.1:{self.cfg.ports.get('fastvideo', 8010)}"
             env.setdefault("RUST_LOG", "info")
         return env
 

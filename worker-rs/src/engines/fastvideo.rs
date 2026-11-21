@@ -221,17 +221,47 @@ pub fn serve_argv(ctx: &Ctx, variant: Option<&str>) -> JobResult<Vec<String>> {
 /// The resident `fv-serve` for `model`'s process group (started when it is
 /// not up: the group's config with `model` resident), its base URL and the
 /// load it cost. Jobs and the pod's live streams / segments share it.
+///
+/// `need_resident`: this caller needs **this** model loaded, not merely a
+/// process that serves the group. fv-serve keeps one model resident and
+/// swaps on demand for a job, but its live-stream and segment sessions
+/// refuse a model that is not resident, so a session for a sibling of the
+/// loaded model restarts fv-serve with its own model resident (2026-11-21:
+/// a segment on a pod was accepted and then failed with "model
+/// `fasth3-4step-vsa-480p-taeh3` is not resident").
 pub fn ensure_serve(
     ctx: &Ctx,
     model: &crate::catalog::Model,
+    need_resident: bool,
 ) -> JobResult<(String, Option<Sidecar>, f64)> {
     let port = ctx.port(ENGINE);
     let base = format!("http://127.0.0.1:{port}");
-    if ctx.fv_fake {
-        return Ok((base, None, 0.0));
-    }
     let variant = model.recipe.get("variant").map(py_str).unwrap_or_default();
     let key = format!("{KEY}:{}", process_of(model)); // one fv-serve per process group (a family: its models swap inside it)
+    if ctx.fv_fake {
+        ctx.sidecars.note_variant(&key, &variant);
+        return Ok((base, None, 0.0));
+    }
+    if need_resident {
+        let holds_other = ctx
+            .sidecars
+            .get(ENGINE)
+            .filter(|c| c.alive() && c.key == key)
+            .is_some()
+            && ctx.sidecars.variant_of(&key).as_deref() != Some(variant.as_str());
+        if holds_other {
+            (ctx.log)(&format!(
+                "[fastvideo] {key} holds {}; restarting with {variant} resident",
+                ctx.sidecars
+                    .variant_of(&key)
+                    .unwrap_or_else(|| "another model".into())
+            ));
+            if let Some(cur) = ctx.sidecars.get(ENGINE) {
+                cur.stop(15.0);
+            }
+            ctx.sidecars.remove(ENGINE);
+        }
+    }
     let argv = serve_argv(ctx, Some(&variant))?;
     let env = ctx.env_of(ENGINE);
     let make = || {
@@ -249,11 +279,15 @@ pub fn ensure_serve(
         .ensure(ENGINE, &key, &make, model.vram_gib, Some(&loading))?;
     // A model switch inside fv-serve (swap) needs the VRAM too.
     ctx.sidecars.make_room(ENGINE, model.vram_gib);
+    // Started with this model resident, or a job that swaps to it on its way
+    // through: either way fv-serve holds `variant` from here.
+    ctx.sidecars.note_variant(&key, &variant);
     Ok((base, Some(s), l))
 }
 
 pub fn run(ctx: &Ctx, job: &Job) -> JobResult<RunResult> {
-    let (base, sc, load_s) = ensure_serve(ctx, &job.model)?;
+    // A job may swap inside the running fv-serve: no restart for a sibling.
+    let (base, sc, load_s) = ensure_serve(ctx, &job.model, false)?;
     let tail = |sc: &Option<Sidecar>| sc.as_ref().map(|s| s.tail(TAIL)).unwrap_or_default();
     let urls = media_urls(ctx, job)?;
     let body = Value::Object(flags::fastvideo_body(job, ctx.knobs, &urls, job.seed)?);

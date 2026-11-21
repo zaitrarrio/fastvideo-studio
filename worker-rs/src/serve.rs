@@ -142,11 +142,11 @@ struct State {
     queue: Mutex<VecDeque<String>>,
     wake: Condvar,
     running: Mutex<Option<String>>,
-    /// Live streams: id → the fv-serve base they run on.
-    live: Mutex<HashMap<String, String>>,
-    /// Segment streams: stream_id → the fv-serve base; and the mirrored
-    /// segments: segment id → the presigned R2 URL of its MP4.
-    seg_streams: Mutex<HashMap<String, String>>,
+    /// Live streams: id → (the fv-serve base they run on, their model id).
+    live: Mutex<HashMap<String, (String, String)>>,
+    /// Segment streams: stream_id → (the fv-serve base, the model id); and
+    /// the mirrored segments: segment id → the presigned R2 URL of its MP4.
+    seg_streams: Mutex<HashMap<String, (String, String)>>,
     seg_urls: Mutex<HashMap<String, Value>>,
     stop: AtomicBool,
     jobs_done: AtomicU64,
@@ -498,6 +498,9 @@ fn handle_streams(state: &Arc<State>, mut req: Request, method: Method, path: &s
             );
         };
         let variant = model.recipe.get("variant").map(py_str).unwrap_or_default();
+        if let Some(c) = session_conflict(state, &model) {
+            return reply(req, 409, &c);
+        }
         let (base, load_s) = match state.worker.fastvideo_serve(&model.id, None) {
             Ok(v) => v,
             Err(e) => return reply(req, 503, &e.to_output()),
@@ -534,7 +537,7 @@ fn handle_streams(state: &Arc<State>, mut req: Request, method: Method, path: &s
                     .live
                     .lock()
                     .unwrap()
-                    .insert(id.to_string(), base.clone());
+                    .insert(id.to_string(), (base.clone(), model.id.clone()));
                 (state.log)(&format!("serve: stream {id} on {} ({model_id})", model.id));
             }
             if let Value::Object(o) = &mut v {
@@ -546,7 +549,7 @@ fn handle_streams(state: &Arc<State>, mut req: Request, method: Method, path: &s
     }
     if method == Method::Get && path == "/streams" {
         let live = state.live.lock().unwrap().clone();
-        let bases: HashSet<String> = live.values().cloned().collect();
+        let bases: HashSet<String> = live.values().map(|(b, _)| b.clone()).collect();
         let mut all = Vec::new();
         for b in bases {
             let (code, v) = forward("GET", &format!("{b}/fv/v1/streams"), None);
@@ -576,7 +579,7 @@ fn handle_streams(state: &Arc<State>, mut req: Request, method: Method, path: &s
     {
         return reply(req, 404, &json!({"error": "no such stream"}));
     }
-    let Some(base) = state.live.lock().unwrap().get(id).cloned() else {
+    let Some(base) = state.live.lock().unwrap().get(id).map(|(b, _)| b.clone()) else {
         return reply(req, 404, &json!({"error": "no such stream on this pod"}));
     };
     match (method, action) {
@@ -668,13 +671,23 @@ fn handle_segments(state: &Arc<State>, mut req: Request, method: Method, path: &
         };
         let variant = model.recipe.get("variant").map(py_str).unwrap_or_default();
         // A stream keeps the fv-serve it opened on.
-        let known = state.seg_streams.lock().unwrap().get(&stream_id).cloned();
+        let known = state
+            .seg_streams
+            .lock()
+            .unwrap()
+            .get(&stream_id)
+            .map(|(b, _)| b.clone());
         let (base, load_s) = match known {
             Some(b) => (b, 0.0),
-            None => match state.worker.fastvideo_serve(&model.id, None) {
-                Ok(v) => v,
-                Err(e) => return reply(req, 503, &e.to_output()),
-            },
+            None => {
+                if let Some(c) = session_conflict(state, &model) {
+                    return reply(req, 409, &c);
+                }
+                match state.worker.fastvideo_serve(&model.id, None) {
+                    Ok(v) => v,
+                    Err(e) => return reply(req, 503, &e.to_output()),
+                }
+            }
         };
         let mut out = body.as_object().cloned().unwrap_or_default();
         out.insert("model".into(), json!(variant));
@@ -688,7 +701,7 @@ fn handle_segments(state: &Arc<State>, mut req: Request, method: Method, path: &
                 .seg_streams
                 .lock()
                 .unwrap()
-                .insert(stream_id.clone(), base.clone());
+                .insert(stream_id.clone(), (base.clone(), model.id.clone()));
             if let Value::Object(o) = &mut v {
                 o.insert("studio_model".into(), json!(model.id));
                 o.insert("load_s".into(), json!(crate::py::round_to(load_s, 1)));
@@ -701,7 +714,13 @@ fn handle_segments(state: &Arc<State>, mut req: Request, method: Method, path: &
         if !seg_id_ok(sid) {
             return reply(req, 404, &json!({"error": "no such stream"}));
         }
-        let Some(base) = state.seg_streams.lock().unwrap().get(sid).cloned() else {
+        let Some(base) = state
+            .seg_streams
+            .lock()
+            .unwrap()
+            .get(sid)
+            .map(|(b, _)| b.clone())
+        else {
             return reply(
                 req,
                 404,
@@ -748,7 +767,7 @@ fn handle_segments(state: &Arc<State>, mut req: Request, method: Method, path: &
         .lock()
         .unwrap()
         .values()
-        .cloned()
+        .map(|(b, _)| b.clone())
         .collect();
     let mut found: Option<(u16, Value)> = None;
     for b in bases {
@@ -931,6 +950,35 @@ pub fn terminate_pod(cfg: &ServeConfig, log: &Log) {
         }
         std::thread::sleep(Duration::from_secs(5));
     }
+}
+
+/// A session for another model restarts fv-serve (it keeps one model
+/// resident), which would kill the sessions already on it: refuse instead,
+/// naming them.
+fn session_conflict(state: &Arc<State>, model: &crate::catalog::Model) -> Option<Value> {
+    let mut others: Vec<String> = Vec::new();
+    for (id, (_, m)) in state.live.lock().unwrap().iter() {
+        if *m != model.id {
+            others.push(format!("live stream {id} on {m}"));
+        }
+    }
+    for (id, (_, m)) in state.seg_streams.lock().unwrap().iter() {
+        if *m != model.id {
+            others.push(format!("segment stream {id} on {m}"));
+        }
+    }
+    if others.is_empty() {
+        return None;
+    }
+    others.sort();
+    Some(json!({
+        "error": format!(
+            "fv-serve keeps one model resident and {} is open: stop it before starting a session on {}",
+            others.join(", "),
+            model.id
+        ),
+        "where": "engine",
+    }))
 }
 
 /// Serve until the pod-hours cap (then terminate the pod and return) or

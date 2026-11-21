@@ -136,7 +136,7 @@ async function runpod(env, path, { method = "GET", body, timeoutMs } = {}) {
   const textBody = await r.text();
   let data;
   try { data = textBody ? JSON.parse(textBody) : {}; } catch { data = { raw: textBody }; }
-  if (!r.ok) throw new HttpError(r.status === 401 || r.status === 403 ? 502 : r.status, `RunPod ${path} answered ${r.status}: ${data.error || data.raw || textBody}`.slice(0, 400));
+  if (!r.ok) throw new HttpError(r.status === 401 || r.status === 403 ? 502 : r.status, `RunPod ${path} answered ${r.status}: ${errText(data.error) || data.raw || textBody}`.slice(0, 400));
   return data;
 }
 
@@ -206,8 +206,20 @@ async function runpodRest(env, path, { method = "GET", body, timeoutMs = 60_000 
   const textBody = await r.text();
   let data;
   try { data = textBody ? JSON.parse(textBody) : {}; } catch { data = { raw: textBody }; }
-  if (!r.ok) throw new HttpError(r.status === 401 || r.status === 403 ? 502 : r.status, `RunPod ${method} ${path} answered ${r.status}: ${data.error || data.message || data.raw || textBody}`.slice(0, 400));
+  if (!r.ok) throw new HttpError(r.status === 401 || r.status === 403 ? 502 : r.status, `RunPod ${method} ${path} answered ${r.status}: ${errText(data.error) || errText(data.message) || data.raw || textBody}`.slice(0, 400));
   return data;
+}
+
+// fv-serve reports `{error: {message, type, param}}` and the pod relays it
+// verbatim, so an error field is not always a string (it printed as
+// "[object Object]" on the page, 2026-11-21).
+function errText(e) {
+  if (e == null) return "";
+  if (typeof e === "string") return e;
+  if (typeof e !== "object") return String(e);
+  const m = e.message || e.error || e.detail || e.msg;
+  const where = e.param ? ` (${e.param})` : "";
+  return m ? `${typeof m === "string" ? m : JSON.stringify(m)}${where}` : JSON.stringify(e);
 }
 
 async function pod(env, rec, path, { method = "GET", body, timeoutMs = 60_000 } = {}) {
@@ -227,7 +239,7 @@ async function pod(env, rec, path, { method = "GET", body, timeoutMs = 60_000 } 
     const tail = Array.isArray(data.log_tail) ? data.log_tail.map((l) => String(l).replace(/\x1b\[[0-9;]*m/g, "").trim()).filter(Boolean) : [];
     const lines = tail.filter((l) => !/tower_http|on_failure|on_response|classification=/.test(l));
     const why = [...lines].reverse().find((l) => /\bERROR\b|error=|failed|refused|No such file|not found/i.test(l)) || lines[lines.length - 1];
-    throw new HttpError(r.status === 401 ? 502 : r.status, `the pod answered ${r.status} on ${path}: ${data.error || data.raw || textBody}${why ? ` (${why})` : ""}`.slice(0, 600));
+    throw new HttpError(r.status === 401 ? 502 : r.status, `the pod answered ${r.status} on ${path}: ${errText(data.error) || data.raw || textBody}${why ? ` (${why})` : ""}`.slice(0, 600));
   }
   return data;
 }

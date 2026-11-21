@@ -304,6 +304,11 @@ pub struct SidecarManager {
     pub log: Log,
     /// engine → sidecar, in start order
     sidecars: Mutex<Vec<(String, Sidecar)>>,
+    /// sidecar key → the model variant it holds. fv-serve serves a whole
+    /// process group but keeps **one** model resident, and its live-stream
+    /// and segment sessions refuse a model that is not (its jobs swap on
+    /// demand instead), so the stream path has to know what is loaded.
+    variants: Mutex<HashMap<String, String>>,
     pub load_timeout_s: f64,
     pub vram_margin_gib: f64,
     pub gpu_query: GpuQuery,
@@ -320,6 +325,7 @@ impl SidecarManager {
         SidecarManager {
             log,
             sidecars: Mutex::new(Vec::new()),
+            variants: Mutex::new(HashMap::new()),
             load_timeout_s,
             vram_margin_gib: 1.0,
             gpu_query: Arc::new(|| gpu::query(0)),
@@ -332,10 +338,23 @@ impl SidecarManager {
             out.insert(
                 e.clone(),
                 json!({"key": s.key, "alive": s.alive(), "pid": s.pid(),
+                       "variant": self.variant_of(&s.key),
                        "ready_s": s.ready_at().map(|r| crate::py::round_to(r - s.started_at(), 1))}),
             );
         }
         out
+    }
+
+    /// Records the model a sidecar now holds (see `variants`).
+    pub fn note_variant(&self, key: &str, variant: &str) {
+        self.variants
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), variant.to_string());
+    }
+
+    pub fn variant_of(&self, key: &str) -> Option<String> {
+        self.variants.lock().unwrap().get(key).cloned()
     }
 
     pub fn get(&self, engine: &str) -> Option<Sidecar> {

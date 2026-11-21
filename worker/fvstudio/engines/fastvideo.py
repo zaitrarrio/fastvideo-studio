@@ -127,6 +127,8 @@ def run(ctx: Ctx, job: Job) -> RunResult:
     load_s = 0.0
     variant = job.model.recipe["variant"]
     key = f"{KEY}:{process_of(job.model)}"  # one fv-serve per process group (a family: its models swap inside it)
+    # A job swaps inside the running process; only a live stream or a segment
+    # session (the pod's serve mode, Rust only) needs its own model resident.
     if not ctx.fv_fake:
         def make() -> Sidecar:
             return Sidecar(ENGINE, key, serve_argv(ctx, variant), ctx.env[ENGINE], ping_probe(f"{base}/ping"))

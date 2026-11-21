@@ -883,7 +883,7 @@ impl Worker {
         let dir = self.cfg.jobs_dir.join("streams");
         std::fs::create_dir_all(&dir)?;
         let ctx = self.ctx(dir, &engine_env, &report);
-        let (base, _sc, load_s) = fastvideo::ensure_serve(&ctx, model)?;
+        let (base, _sc, load_s) = fastvideo::ensure_serve(&ctx, model, true)?;
         Ok((base, load_s))
     }
 

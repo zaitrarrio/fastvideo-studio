@@ -128,9 +128,17 @@ function renderSegments() {
   $("seg-next").disabled = S.segBusy || !podReady() || !(g ? true : liveModelOk());
   $("seg-next").textContent = S.segBusy ? "Asking…" : g ? `Next segment (#${g.index})` : "First segment";
   $("seg-close").disabled = !g || S.segBusy;
-  $("seg-list").innerHTML = (g?.items || []).map((it) => `<div class="item${it.id === g.current ? " current" : ""}" data-seg="${esc(it.id)}"><span class="st ${it.status === "succeeded" ? "ok" : it.status === "failed" ? "bad" : "wait"}"></span><span class="t">#${it.index} · ${esc(it.status)}${it.duration_sec ? ` · ${fmt(it.duration_sec)}` : ""}${it.reset ? " · cut" : ""}</span><span class="p">${esc(it.prompt.slice(0, 80))}</span></div>`).join("");
+  $("seg-list").innerHTML = (g?.items || []).map((it) => `<div class="item${it.id === g.current ? " current" : ""}" data-seg="${esc(it.id)}"><span class="st ${it.status === "succeeded" ? "ok" : it.status === "failed" ? "bad" : "wait"}"></span><span class="t">#${it.index} · ${esc(it.status)}${it.duration_sec ? ` · ${fmt(it.duration_sec)}` : ""}${it.reset ? " · cut" : ""}</span><span class="p">${esc(it.error ? `${it.prompt.slice(0, 40)} — ${it.error}` : it.prompt.slice(0, 80))}</span></div>`).join("");
 }
 function showSegError(m) { $("seg-err").textContent = m || ""; $("seg-err").hidden = !m; }
+// fv-serve's errors are objects ({message, type, param}), not strings.
+function errText(e) {
+  if (e == null) return "";
+  if (typeof e === "string") return e;
+  if (typeof e !== "object") return String(e);
+  const m = e.message || e.error || e.detail;
+  return m ? `${m}${e.param ? ` (${e.param})` : ""}` : JSON.stringify(e);
+}
 async function nextSegment() {
   if (S.segBusy || !podReady()) return;
   const prompt = $("prompt").value.trim();
@@ -165,8 +173,8 @@ async function pollSegments() {
       if (r.video_url) it.video_url = r.video_url;
       if (r.duration_sec) it.duration_sec = r.duration_sec;
       if (r.session?.restarted) g.restarted = true;
-      if (r.status === "failed") it.error = r.error || "failed";
-      if (r.mirror_error) it.error = r.mirror_error;
+      if (r.status === "failed") it.error = errText(r.error) || "failed";
+      if (r.mirror_error) it.error = errText(r.mirror_error);
     } catch (e) {
       if (e instanceof api.AuthError) { lock("The studio token was refused."); return; }
       showSegError(`Segment ${it.index}: ${e.message}`);

@@ -412,6 +412,21 @@ describe("live streams on the pod", () => {
     assert.equal(r.status, 400);
   });
 
+  test("fv-serve's structured error is flattened, not [object Object]", async () => {
+    const e = env(podEnvVars);
+    await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));
+    globalThis.fetch = fakeWorld({
+      pod: {
+        "/segments": () => new Response(JSON.stringify({ error: { message: "duration_sec must be 1 or more", type: "invalid_param", param: "duration_sec" } }), { status: 400, headers: { "Content-Type": "application/json" } }),
+      },
+    });
+    const r = await worker.fetch(req("/api/segments", { method: "POST", body: { stream_id: "s1", segment_index: 0, model: fvModel, prompt: "a fox" } }), e);
+    assert.equal(r.status, 400);
+    const body = await r.json();
+    assert.equal(body.error, "the pod answered 400 on /segments: duration_sec must be 1 or more (duration_sec)");
+    assert.doesNotMatch(body.error, /object Object/);
+  });
+
   test("a pod error skips the request traces and shows the line that names the cause", async () => {
     const e = env(podEnvVars);
     await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));

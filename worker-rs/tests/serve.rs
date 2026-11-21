@@ -305,11 +305,28 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     let (code, l) = pod.call("GET", "/streams", None, true);
     assert_eq!(code, 200);
     assert_eq!(l["data"].as_array().unwrap().len(), 1);
+    // Another model's session would restart fv-serve under this stream (one
+    // model is resident at a time), so the pod refuses it before fv-serve.
+    let (code, conflict) = pod.call(
+        "POST",
+        "/streams",
+        Some(json!({"model": "sol-h3", "prompt": "x"})),
+        true,
+    );
+    assert_eq!(code, 409, "{conflict}");
+    let msg = conflict["error"].as_str().unwrap();
+    assert!(
+        msg.contains("keeps one model resident")
+            && msg.contains(id.as_str())
+            && msg.contains("sol-h3"),
+        "{msg}"
+    );
+    // The same model reaches fv-serve, which is busy with the open stream.
     assert_eq!(
         pod.call(
             "POST",
             "/streams",
-            Some(json!({"model": "sol-h3", "prompt": "x"})),
+            Some(json!({"model": "fasth3-4step-vsa-480p-taeh3", "prompt": "x"})),
             true
         )
         .0,
@@ -421,6 +438,24 @@ fn serve_runs_segments_and_mirrors_their_mp4s_to_the_bucket() {
     let (code, ses) = pod.call("GET", "/segments/streams/s1", None, true);
     assert_eq!(code, 200);
     assert_eq!(ses["segments"], 2);
+    // A segment stream on a sibling model (the same process group) would
+    // restart fv-serve under this session: refused, not started.
+    let (code, conflict) = pod.call(
+        "POST",
+        "/segments",
+        Some(
+            json!({"stream_id": "s2", "segment_index": 0, "model": "longlive-1.3b", "prompt": "x"}),
+        ),
+        true,
+    );
+    assert_eq!(code, 409, "{conflict}");
+    assert!(
+        conflict["error"]
+            .as_str()
+            .unwrap()
+            .contains("segment stream s1 on sfwan21-1.3b"),
+        "{conflict}"
+    );
     assert_eq!(
         pod.call("DELETE", "/segments/streams/s1", None, true).0,
         204

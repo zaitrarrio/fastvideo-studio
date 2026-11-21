@@ -117,3 +117,36 @@ turned up three more, fixed after it:
    404s (8b0f2e5).
 
 Still not run on a pod: a live stream reaching `publishing` over WHEP.
+
+## 2026-11-21 06:3x UTC: live streams reach Cloudflare (image `sha-8b0f2e5`)
+
+Two more field faults on the way, then the one thing left is not ours:
+
+7. **A stream's canvas is `width` / `height`.** The pod forwarded the
+   segment spelling (`resolution`, `aspect_ratio`) to `POST
+   /fv/v1/streams`, which denies unknown fields: every live stream from
+   the page answered 400 ``unknown field `aspect_ratio` ``. Each forward
+   now carries only its own API's fields and drops the rest, so an older
+   page still opens a session (91aba7b). The fake fv-serve took any field,
+   which is why the suite missed it: it now denies unknown fields on both
+   bodies and checks `aspect_ratio` is `W:H`. Putting the old field back
+   makes the stream test fail with the pod's own 400.
+8. **A stale segment session.** The pod `vqxz97uo11pnvj` came up with
+   `str_rslwo29smwq0hsqn` registered and fv-serve answering `has no
+   session here`: reading it dropped it, and the job loop would have
+   pruned it (8b0f2e5).
+
+With fv-serve holding `fasth3-4step-vsa` (`/health` now names the variant),
+`POST /streams` is accepted, the model loads, the output kind is
+`cloudflare` and fv-serve calls Cloudflare, which refuses:
+
+```
+Cloudflare Stream create live input: HTTP 403: 10002 Authorization Failure:
+the API token needs the Account > Stream > Edit permission and Stream must
+be enabled on the account
+```
+
+So everything up to the publish is wired: the credentials reach the pod
+(`FV_CF_*`), the request validates, the model is resident. The owner's
+`CF_STREAM_API_TOKEN` needs **Account > Stream > Edit** (and Stream enabled
+on the account); the pod's 500 carries that text to the page.

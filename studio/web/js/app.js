@@ -4,7 +4,7 @@
 import * as api from "./api.js";
 import { families, familyById, modelById, defaultModel, taskLabel, taskSpec, knobDef, inlineLimit } from "./catalog.js";
 import { knobDefaults, buildRequest, CARD_LIMIT, cliLine, hintFor, missingInputs, readKnob, renderFamilies, renderModels, renderTasks, renderSizes, renderLengths, renderKnobs, updateKnobVisibility, renderInputs, isUpscaleKnob } from "./form.js";
-import { renderStages, summaryText, showClip, aspectOf, isTerminal, noteStage, fmt } from "./player.js";
+import { renderStages, summaryText, showClip, aspectOf, apiRatio, isTerminal, noteStage, fmt } from "./player.js";
 import { loadSession, saveSession, addHistory, updateHistory, findItem, isExpired, playableClips, renderHistory } from "./session.js";
 import { playWhep, stopPlayer, liveText, isLiveTerminal, commandFor } from "./live.js";
 
@@ -150,7 +150,7 @@ async function nextSegment() {
   const body = { stream_id: g.streamId, segment_index: g.index, model: g.model, prompt, duration_sec: Number($("seg-seconds").value) || 6 };
   if ($("seg-reset").value === "1") { body.reset = true; $("seg-reset").value = ""; }
   const seed = Number($("seed").value); if (Number.isFinite(seed) && $("seed").value !== "") body.seed = seed;
-  if (S.size && g.index === 0) { body.resolution = `${Math.min(S.size[0], S.size[1])}p`; body.aspect_ratio = aspectOf(S.size[0], S.size[1]); }
+  if (S.size && g.index === 0) { body.resolution = `${Math.min(S.size[0], S.size[1])}p`; body.aspect_ratio = apiRatio(S.size[0], S.size[1]); }
   S.segBusy = true; renderSegments(); updateGo();
   try {
     const r = await api.nextSegment(body);
@@ -246,7 +246,7 @@ async function startStream() {
   const body = { model: S.model.id, prompt };
   const seed = Number($("seed").value); if (Number.isFinite(seed) && $("seed").value !== "") body.seed = seed;
   if (S.size) body.resolution = `${Math.min(S.size[0], S.size[1])}p`;
-  if (S.size) body.aspect_ratio = aspectOf(S.size[0], S.size[1]);
+  if (S.size) body.aspect_ratio = apiRatio(S.size[0], S.size[1]);
   try {
     S.stream = await api.openStream(body);
     S.whepPlaying = false;

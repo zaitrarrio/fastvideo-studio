@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import catalog from "../../catalog/catalog.json" with { type: "json" };
 import { modelById, modelsForFamily, families, knobName } from "../web/js/catalog.js";
 import { knobDefaults, knobVisible, buildOptions, buildRequest, cliLine, frameLabel, sizeLabel, aspectLabel, shellQuote, missingInputs, upscaleOf, hintFor } from "../web/js/form.js";
+import { aspectOf, apiRatio } from "../web/js/player.js";
 
 const v2 = modelById(catalog, "fasth3-v2");
 const base = modelById(catalog, "h3");
@@ -184,5 +185,22 @@ describe("the command line", () => {
     const lb = JSON.parse(cliLine(catalog, ltx, buildRequest(catalog, ltx, ls), ls).split("-d '")[1].slice(0, -1));
     assert.equal(lb.fps, 24);
     assert.equal(lb.num_frames, 121);
+  });
+});
+
+describe("aspect ratios", () => {
+  test("the CSS box and fv-serve's aspect_ratio are different strings", () => {
+    // The sessions (live streams, segments) sent the CSS form and fv-serve
+    // refused it: `invalid aspect ratio \`1344 / 768\`; expected W:H`.
+    assert.equal(aspectOf(1344, 768), "1344 / 768");
+    assert.equal(apiRatio(1344, 768), "7:4");
+    assert.equal(apiRatio(1280, 720), "16:9");
+    assert.equal(apiRatio(832, 480), "26:15");
+    assert.equal(apiRatio(768, 1344), "4:7");
+    assert.equal(apiRatio(512, 512), "1:1");
+    assert.equal(apiRatio(0, 0), "16:9");
+    for (const [w, h] of [[1344, 768], [832, 480], [1280, 720], [512, 512]]) {
+      assert.match(apiRatio(w, h), /^[1-9][0-9]*:[1-9][0-9]*$/);
+    }
   });
 });

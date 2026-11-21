@@ -106,6 +106,18 @@ export function showClip(screen, video, empty, output, aspect) {
   }
 }
 
+// CSS `aspect-ratio` (`1344 / 768`), for the video box.
 export function aspectOf(w, h) {
   return w && h ? `${w} / ${h}` : "16 / 9";
+}
+
+// fv-serve's `aspect_ratio`: `W:H` in lowest terms (`16:9`). It parses a
+// colon only, so the CSS form above was refused with `invalid aspect ratio
+// \`1344 / 768\`; expected W:H` (2026-11-21: every live stream and segment
+// from the page answered 400).
+export function apiRatio(w, h) {
+  if (!w || !h) return "16:9";
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const g = gcd(Math.round(w), Math.round(h)) || 1;
+  return `${Math.round(w) / g}:${Math.round(h) / g}`;
 }

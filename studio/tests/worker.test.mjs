@@ -412,6 +412,29 @@ describe("live streams on the pod", () => {
     assert.equal(r.status, 400);
   });
 
+  test("a pod error skips the request traces and shows the line that names the cause", async () => {
+    const e = env(podEnvVars);
+    await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));
+    globalThis.fetch = fakeWorld({
+      pod: {
+        "/streams": () => new Response(JSON.stringify({
+          error: "fastvideo failed to start: its model load failed ({\"status\":\"failed\"})",
+          where: "engine",
+          log_tail: [
+            "\u001b[2m2026-11-21T03:40Z\u001b[0m INFO fv_serve: fv-serve 0.1.87",
+            "2026-11-21T03:41Z ERROR fastvideo_serve::engine: load failed error=No such file or directory (os error 2)",
+            "2026-11-21T03:42Z ERROR tower_http::trace::on_failure: response failed classification=Status code: 503 Service Unavailable latency=0 ms",
+          ],
+        }), { status: 503, headers: { "Content-Type": "application/json" } }),
+      },
+    });
+    const r = await worker.fetch(req("/api/streams", { method: "POST", body: { model: fvModel, prompt: "a fox" } }), e);
+    assert.equal(r.status, 503);
+    const body = await r.json();
+    assert.match(body.error, /load failed error=No such file or directory \(os error 2\)\)$/);
+    assert.doesNotMatch(body.error, /tower_http/);
+  });
+
   test("a sidecar's death on the pod shows its last log line", async () => {
     const e = env(podEnvVars);
     await e.UPLOADS.put("studio/pod.json", JSON.stringify({ id: "p1", url: "https://p1-8000.proxy.runpod.net", token: "podtok" }));

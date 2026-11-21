@@ -851,6 +851,18 @@ impl Worker {
             ))
         })?;
         let report = Reporter::new(progress, "fastvideo", &model.id);
+        // The weights first, exactly as the job pipeline does: fv-serve loads
+        // its resident model at start, and without the trees that load fails
+        // and its /ping answers 503 {"status":"failed"} (2026-11-21, the first
+        // segment session on a pod).
+        if !self.cfg.fv_fake {
+            report.force("staging");
+            self.weights.ensure_model(
+                &model.trees,
+                &model.stage,
+                Some(&|d: &str| report.detail("staging", d)),
+            )?;
+        }
         let engine_env: EngineEnv = ["h3", "fastwan", "fastvideo"]
             .iter()
             .map(|e| (e.to_string(), self.env_for(e)))
@@ -1097,6 +1109,39 @@ mod tests {
             Some("/workspace/w/h3-rs/assets/realesr-animevideov3.safetensors")
         );
         assert_eq!(c.llama_bin, up::LLAMA_BIN);
+    }
+
+    #[test]
+    fn fastvideo_serve_stages_the_models_weights_before_starting_fv_serve() {
+        // A stream or a segment session starts fv-serve itself; it must stage
+        // the model's trees first, or fv-serve's resident load fails and its
+        // /ping answers 503 {"status":"failed"}. Here no tree is reachable
+        // (empty local R2 dir, empty volume), so staging must be what fails.
+        let dir = crate::tempdir("worker-fvserve");
+        let e: EnvMap = [
+            ("STUDIO_R2_LOCAL_DIR", dir.join("r2").to_str().unwrap()),
+            ("STUDIO_VOLUME", dir.join("vol").to_str().unwrap()),
+            ("STUDIO_JOBS_DIR", dir.join("jobs").to_str().unwrap()),
+            (
+                "STUDIO_CATALOG",
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../catalog/catalog.json")
+                    .to_str()
+                    .unwrap(),
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let w = Worker::from_env_map(&e, crate::null_log()).unwrap();
+        let err = w
+            .fastvideo_serve("fasth3-4step-vsa-480p-taeh3", None)
+            .unwrap_err();
+        assert_eq!(err.where_, "stage", "{}", err.message);
+        assert!(
+            w.fastvideo_serve("nope", None).unwrap_err().where_ == "validate",
+            "an unknown model is still a validation error"
+        );
     }
 
     #[test]

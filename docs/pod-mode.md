@@ -63,6 +63,13 @@ route (`STUDIO_SERVE_NO_AUTH=1` only for tests).
 | `POST /streams`, `GET /streams/{id}`, `POST /streams/{id}/commands`, `DELETE /streams/{id}` | phase 2: fv-serve's `/fv/v1/streams` on the model's process group, `output.kind = cloudflare`; the page gets `playback.whep_url` |
 | `POST /segments`, `GET /segments/{id}`, `GET` / `DELETE /segments/streams/{id}` | phase 3: fv-serve's `/v1/segments`; a finished segment's MP4 is uploaded to R2 and answered as a presigned `video_url` |
 
+A stream or a segment session stages the model's trees before it starts
+fv-serve, exactly as a job does (`fastvideo_serve`): fv-serve loads its
+resident model at start, and without the weights that load fails and its
+`/ping` answers 503 `{"status":"failed"}` (2026-11-21, the first segment
+session on a pod). The first stream of a model therefore costs its staging
+and its load, like the model's first job.
+
 Jobs, streams and segments share the GPU: a live stream or a segment session
 holds its fv-serve, so a job for another process group waits in the queue
 until the stream is stopped (`make_room` cannot stop a session the page is

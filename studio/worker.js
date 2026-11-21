@@ -220,11 +220,14 @@ async function pod(env, rec, path, { method = "GET", body, timeoutMs = 60_000 } 
   let data;
   try { data = textBody ? JSON.parse(textBody) : {}; } catch { data = { raw: textBody }; }
   if (!r.ok) {
-    // A sidecar's death carries its log tail; the last line names the cause
-    // ("Address already in use", a missing tree, ...): show it.
+    // A sidecar's death carries its log tail; one of its lines names the cause
+    // ("Address already in use", a missing tree, a load error). Request traces
+    // are noise and sit last, so skip them and prefer a line that reports an
+    // error.
     const tail = Array.isArray(data.log_tail) ? data.log_tail.map((l) => String(l).replace(/\x1b\[[0-9;]*m/g, "").trim()).filter(Boolean) : [];
-    const why = tail.length ? ` (${tail[tail.length - 1]})` : "";
-    throw new HttpError(r.status === 401 ? 502 : r.status, `the pod answered ${r.status} on ${path}: ${data.error || data.raw || textBody}${why}`.slice(0, 600));
+    const lines = tail.filter((l) => !/tower_http|on_failure|on_response|classification=/.test(l));
+    const why = [...lines].reverse().find((l) => /\bERROR\b|error=|failed|refused|No such file|not found/i.test(l)) || lines[lines.length - 1];
+    throw new HttpError(r.status === 401 ? 502 : r.status, `the pod answered ${r.status} on ${path}: ${data.error || data.raw || textBody}${why ? ` (${why})` : ""}`.slice(0, 600));
   }
   return data;
 }

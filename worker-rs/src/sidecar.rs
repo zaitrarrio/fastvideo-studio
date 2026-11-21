@@ -48,9 +48,14 @@ pub fn ping_probe(url: &str) -> Probe {
             200 => (true, None),
             503 => {
                 let text: String = String::from_utf8_lossy(&body).chars().take(300).collect();
+                // fv-serve answers `{"status":"failed"}` when its resident
+                // model's load failed: say so, the log tail carries the why.
+                let failed = text.contains("\"failed\"");
                 (
                     false,
-                    Some(if text.is_empty() {
+                    Some(if failed {
+                        format!("its model load failed ({text})")
+                    } else if text.is_empty() {
                         "fv-serve reports 503".into()
                     } else {
                         text

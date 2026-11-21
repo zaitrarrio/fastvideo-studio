@@ -476,6 +476,74 @@ pub fn make_mp4(
     true
 }
 
+/// fv-serve denies unknown fields on these bodies (`serde(deny_unknown_fields)`
+/// on `StreamBody` and `SegmentRequest`), and a canvas is `width` / `height`
+/// for a stream but `resolution` / `aspect_ratio` for a segment. The fake
+/// took anything, so the pod forwarding a segment's fields to the stream API
+/// passed its tests and answered 400 on a pod (2026-11-21).
+pub const STREAM_FIELDS: &[&str] = &[
+    "model",
+    "output",
+    "whip_url",
+    "whip_token",
+    "whip_user",
+    "whip_target",
+    "prompt",
+    "clips",
+    "width",
+    "height",
+    "fps",
+    "seed",
+    "max_seconds",
+    "audio",
+    "continuity",
+    "autoplay",
+];
+
+pub const SEGMENT_FIELDS: &[&str] = &[
+    "stream_id",
+    "segment_index",
+    "model",
+    "prompt",
+    "duration_sec",
+    "resolution",
+    "aspect_ratio",
+    "seed",
+    "recache",
+    "reset",
+    "reference_image_urls",
+    "end_image_url",
+    "context",
+    "callback_url",
+    "extra",
+];
+
+/// `None`, or fv-serve's 400 body for the first field it does not know.
+fn unknown_field(body: &Value, allowed: &[&str]) -> Option<Value> {
+    let obj = body.as_object()?;
+    let bad = obj.keys().find(|k| !allowed.contains(&k.as_str()))?;
+    Some(json!({"error": {
+        "type": "invalid_param",
+        "param": "body",
+        "message": format!("unknown field `{bad}`, expected one of {}", allowed.join(", ")),
+    }}))
+}
+
+/// `16:9`; fv-serve's `Ratio` parses a colon only.
+fn bad_ratio(body: &Value) -> Option<Value> {
+    let r = body.get("aspect_ratio")?.as_str()?;
+    let ok = r.split_once(':').is_some_and(|(w, h)| {
+        w.trim().parse::<u32>().is_ok_and(|w| w > 0) && h.trim().parse::<u32>().is_ok_and(|h| h > 0)
+    });
+    (!ok).then(|| {
+        json!({"error": {
+            "type": "invalid_param",
+            "param": "aspect_ratio",
+            "message": format!("invalid aspect ratio `{r}`; expected W:H"),
+        }})
+    })
+}
+
 #[derive(Default)]
 pub struct FvState {
     pub jobs: Map<String, Value>,
@@ -557,6 +625,11 @@ impl FakeFvServe {
                         serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
                     let mut s = st.lock().unwrap();
                     s.requests.push(body.clone());
+                    if let Some(e) = unknown_field(&body, STREAM_FIELDS) {
+                        drop(s);
+                        respond_json(req, 400, &e);
+                        return;
+                    }
                     let model = body
                         .get("model")
                         .and_then(|m| m.as_str())
@@ -611,6 +684,13 @@ impl FakeFvServe {
                         serde_json::from_slice(&body_of(&mut req)).unwrap_or(json!({}));
                     let mut s = st.lock().unwrap();
                     s.requests.push(body.clone());
+                    if let Some(e) =
+                        unknown_field(&body, SEGMENT_FIELDS).or_else(|| bad_ratio(&body))
+                    {
+                        drop(s);
+                        respond_json(req, 400, &e);
+                        return;
+                    }
                     let sid = body["stream_id"].as_str().unwrap_or("").to_string();
                     if sid.is_empty() || body["prompt"].as_str().unwrap_or("").is_empty() {
                         drop(s);

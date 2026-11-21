@@ -557,13 +557,21 @@ fn handle_streams(state: &Arc<State>, mut req: Request, method: Method, path: &s
                 .cloned()
                 .unwrap_or_else(|| json!({"kind": "cloudflare"})),
         );
+        // fv-serve's StreamBody, which denies unknown fields: a canvas is
+        // `width` / `height` here, not the `resolution` / `aspect_ratio` of
+        // jobs and segments (2026-11-21: the page sent those and every
+        // stream answered 400 `unknown field`). Anything else the caller
+        // sends is dropped, so an older page still opens a stream.
         for k in [
-            "max_seconds",
+            "width",
+            "height",
+            "fps",
             "seed",
-            "resolution",
-            "aspect_ratio",
-            "negative_prompt",
-            "options",
+            "max_seconds",
+            "audio",
+            "continuity",
+            "autoplay",
+            "clips",
         ] {
             if let Some(v) = body.get(k) {
                 out.insert(k.into(), v.clone());
@@ -732,8 +740,30 @@ fn handle_segments(state: &Arc<State>, mut req: Request, method: Method, path: &
                 }
             }
         };
-        let mut out = body.as_object().cloned().unwrap_or_default();
+        // fv-serve's SegmentRequest, which denies unknown fields too (this
+        // path used to forward the body as it came).
+        let mut out = Map::new();
         out.insert("model".into(), json!(variant));
+        for k in [
+            "stream_id",
+            "segment_index",
+            "prompt",
+            "duration_sec",
+            "resolution",
+            "aspect_ratio",
+            "seed",
+            "recache",
+            "reset",
+            "reference_image_urls",
+            "end_image_url",
+            "context",
+            "callback_url",
+            "extra",
+        ] {
+            if let Some(v) = body.get(k) {
+                out.insert(k.into(), v.clone());
+            }
+        }
         let (code, mut v) = forward(
             "POST",
             &format!("{base}/fv/v1/segments"),

@@ -245,8 +245,8 @@ async function startStream() {
   S.streamBusy = true; updateGo();
   const body = { model: S.model.id, prompt };
   const seed = Number($("seed").value); if (Number.isFinite(seed) && $("seed").value !== "") body.seed = seed;
-  if (S.size) body.resolution = `${Math.min(S.size[0], S.size[1])}p`;
-  if (S.size) body.aspect_ratio = apiRatio(S.size[0], S.size[1]);
+  // A stream takes the canvas itself; a segment takes resolution + ratio.
+  if (S.size) { body.width = S.size[0]; body.height = S.size[1]; }
   try {
     S.stream = await api.openStream(body);
     S.whepPlaying = false;

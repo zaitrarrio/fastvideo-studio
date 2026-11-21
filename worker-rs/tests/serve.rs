@@ -281,7 +281,20 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     assert_eq!(pod.call("GET", "/streams/none", None, true).0, 404);
 
     // Open: the catalog model's variant, Cloudflare by default, the WHEP URL back.
-    let (code, s) = pod.call("POST", "/streams", Some(json!({"model": "fasth3-4step-vsa-480p-taeh3", "prompt": "a fox in the snow", "max_seconds": 60})), true);
+    // The page's canvas plus a field only a segment takes: the pod forwards
+    // what the stream API accepts and drops the rest (fv-serve denies
+    // unknown fields, so forwarding `aspect_ratio` here was a 400).
+    let (code, s) = pod.call(
+        "POST",
+        "/streams",
+        Some(
+            json!({"model": "fasth3-4step-vsa-480p-taeh3", "prompt": "a fox in the snow",
+                    "max_seconds": 60, "width": 832, "height": 480, "fps": 24,
+                    "audio": true, "autoplay": true,
+                    "aspect_ratio": "16:9", "resolution": "480p"}),
+        ),
+        true,
+    );
     assert_eq!(code, 201, "{s}");
     let id = s["id"].as_str().unwrap().to_string();
     assert_eq!(s["mode"], "clip");
@@ -297,7 +310,19 @@ fn serve_opens_and_drives_live_streams_on_the_models_fv_serve() {
     assert_eq!(sent["model"], "fasth3-4step-vsa-480p-taeh3");
     assert_eq!(sent["output"], json!({"kind": "cloudflare"}));
     assert_eq!(sent["max_seconds"], 60);
-    assert!(sent.get("studio_model").is_none());
+    assert_eq!(
+        (
+            sent["width"].as_u64(),
+            sent["height"].as_u64(),
+            sent["fps"].as_u64()
+        ),
+        (Some(832), Some(480), Some(24))
+    );
+    assert_eq!(sent["audio"], true);
+    assert_eq!(sent["autoplay"], true);
+    for k in ["aspect_ratio", "resolution", "studio_model"] {
+        assert!(sent.get(k).is_none(), "{k} must not reach the stream API");
+    }
 
     // Health and the list show it; a second stream is fv-serve's 429.
     let (_, h) = pod.call("GET", "/health", None, true);
@@ -404,7 +429,9 @@ fn serve_runs_segments_and_mirrors_their_mp4s_to_the_bucket() {
     assert_eq!(pod.call("GET", "/segments/none", None, true).0, 404);
     assert_eq!(pod.call("GET", "/segments/streams/none", None, true).0, 404);
 
-    let (code, a) = pod.call("POST", "/segments", Some(json!({"stream_id": "s1", "segment_index": 0, "model": "sfwan21-1.3b", "prompt": "a harbour at night", "duration_sec": 6})), true);
+    // A segment takes resolution + ratio, and the pod drops a stream-only
+    // field rather than letting fv-serve refuse the whole request.
+    let (code, a) = pod.call("POST", "/segments", Some(json!({"stream_id": "s1", "segment_index": 0, "model": "sfwan21-1.3b", "prompt": "a harbour at night", "duration_sec": 6, "resolution": "480p", "aspect_ratio": "16:9", "autoplay": true})), true);
     assert_eq!(code, 202, "{a}");
     let id = a["id"].as_str().unwrap().to_string();
     assert_eq!(a["status"], "queued");

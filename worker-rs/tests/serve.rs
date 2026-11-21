@@ -463,4 +463,36 @@ fn serve_runs_segments_and_mirrors_their_mp4s_to_the_bucket() {
     let (_, h) = pod.call("GET", "/health", None, true);
     assert_eq!(h["segment_streams"], json!([]));
     assert_eq!(pod.call("GET", "/segments/streams/s1", None, true).0, 404);
+
+    // A session fv-serve has forgotten (a segment that failed at the open,
+    // or an idle close) must not hold the job queue: on a pod a failed
+    // segment left every job waiting "for the live stream" (2026-11-21).
+    let (code, _) = pod.call(
+        "POST",
+        "/segments",
+        Some(
+            json!({"stream_id": "s9", "segment_index": 0, "model": "sfwan21-1.3b", "prompt": "x"}),
+        ),
+        true,
+    );
+    assert_eq!(code, 202);
+    fake.state.lock().unwrap().seg_sessions.remove("s9");
+    let (_, h) = pod.call("GET", "/health", None, true);
+    assert_eq!(h["segment_streams"], json!(["s9"]), "still registered here");
+    let (_, sub) = pod.call("POST", "/jobs", Some(json!({"op": "info"})), true);
+    let jid = sub["id"].as_str().unwrap().to_string();
+    let t0 = std::time::Instant::now();
+    loop {
+        let (_, j) = pod.call("GET", &format!("/jobs/{jid}"), None, true);
+        if j["status"] == "COMPLETED" {
+            break;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(30),
+            "the job never ran: {j}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (_, h) = pod.call("GET", "/health", None, true);
+    assert_eq!(h["segment_streams"], json!([]), "pruned");
 }

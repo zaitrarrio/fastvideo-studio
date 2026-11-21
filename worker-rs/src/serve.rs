@@ -227,9 +227,19 @@ impl State {
             }
             // A live stream holds the GPU: wait for it to end (or the job to be cancelled).
             let mut waited = false;
-            while (!self.live.lock().unwrap().is_empty()
-                || !self.seg_streams.lock().unwrap().is_empty())
-                && !self.stop.load(Ordering::SeqCst)
+            let mut ticks: u64 = 0;
+            while {
+                // A session fv-serve no longer knows (its segment failed at
+                // the open, or it closed on idle) must not hold the queue:
+                // a failed segment probe blocked every job on a pod
+                // (2026-11-21). Checked on entry and then every ~5 s.
+                if ticks % 10 == 0 {
+                    self.prune_sessions();
+                }
+                ticks += 1;
+                !self.live.lock().unwrap().is_empty()
+                    || !self.seg_streams.lock().unwrap().is_empty()
+            } && !self.stop.load(Ordering::SeqCst)
             {
                 if self
                     .job(&next)
@@ -336,6 +346,39 @@ impl State {
         Some(
             json!({"id": id, "status": self.job(id).map(|j| j.status).unwrap_or_else(|| "CANCELLED".into())}),
         )
+    }
+
+    /// Forgets the live and segment sessions fv-serve no longer has (404 on
+    /// its own route): they would otherwise hold the job queue for the rest
+    /// of the pod's life. Only sessions whose fv-serve answers are dropped;
+    /// a transport error leaves the session alone.
+    fn prune_sessions(&self) {
+        let live: Vec<(String, String)> = self
+            .live
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, (b, _))| (id.clone(), b.clone()))
+            .collect();
+        for (id, base) in live {
+            if forward("GET", &format!("{base}/fv/v1/streams/{id}"), None).0 == 404 {
+                self.live.lock().unwrap().remove(&id);
+                (self.log)(&format!("serve: live stream {id} is gone from fv-serve"));
+            }
+        }
+        let segs: Vec<(String, String)> = self
+            .seg_streams
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, (b, _))| (id.clone(), b.clone()))
+            .collect();
+        for (id, base) in segs {
+            if forward("GET", &format!("{base}/fv/v1/segments/streams/{id}"), None).0 == 404 {
+                self.seg_streams.lock().unwrap().remove(&id);
+                (self.log)(&format!("serve: segment stream {id} is gone from fv-serve"));
+            }
+        }
     }
 
     fn health(&self) -> Value {

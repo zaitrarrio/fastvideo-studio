@@ -77,6 +77,15 @@ resident model at start, and without the weights that load fails and its
 session on a pod). The first stream of a model therefore costs its staging
 and its load, like the model's first job.
 
+fv-serve keeps **one** model resident and swaps only for a job, while its
+live-stream and segment sessions refuse a model that is not resident, so a
+session for a sibling of the loaded model restarts fv-serve with its own
+model resident (`ensure_serve`'s `need_resident`; `/health` reports the
+variant each sidecar holds). A session for another model while one is open
+would kill it, so that is a 409 naming the open session. A session fv-serve
+has forgotten (a segment that failed at the open, an idle close) is pruned
+by the job loop, which would otherwise wait for it forever.
+
 Jobs, streams and segments share the GPU: a live stream or a segment session
 holds its fv-serve, so a job for another process group waits in the queue
 until the stream is stopped (`make_room` cannot stop a session the page is

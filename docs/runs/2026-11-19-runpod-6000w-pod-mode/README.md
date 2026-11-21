@@ -78,3 +78,42 @@ variables were wiped by the next `wrangler deploy`: `keep_vars = true`
 
 Not yet seen on a pod: a live stream reaching `publishing`, and a segment
 MP4 mirrored to R2. The pod was gone before `sha-9ea0d36` existed.
+
+## 2026-11-21 05:47 UTC: segments on a pod, end to end (image `sha-9ea0d36`)
+
+Pod `5brb7ewuu7lm9h`, RTX PRO 6000 Blackwell Server Edition, the EU weights
+volume, `fasth3-4step-vsa-480p-taeh3` (H3 4-step, 480p, TAEH3):
+
+| step | result |
+|---|---|
+| clip job (`POST /jobs`), staging + load + swap | COMPLETED, its MP4 on R2 |
+| `POST /segments` #0, 4 s, 480p, `16:9` | 202, 107 frames planned |
+| the segment | `succeeded`, 107 frames, generation **5.74 s** |
+| its `video_url` | the pod's presigned R2 copy; `fv_video_url` is `http://127.0.0.1:8010/files/…` |
+| the mirrored MP4 | 2.21 MB, h264 832x480 24 fps, 107 frames + AAC (ffprobe) |
+| `POST /segments` #1 (continuing) | `succeeded`, 106 frames, generation 10.05 s, `seam.anchor_diff` 51.2 dB |
+| `GET /segments/streams/str_val1` | `path: clip`, `clips: 2`, the model, 832x480 |
+| `DELETE` it | `closed: true`, the pod idle again |
+
+So the mirror to the bucket, the two-segment continuity and the loopback
+artifact base all work on real hardware. The three faults above (the port,
+the staging, the artifact URL) are what stood in the way; this run also
+turned up three more, fixed after it:
+
+4. **A session needs its own model resident.** fv-serve swaps only for a
+   job, so a segment for a sibling of the loaded model was accepted and
+   then failed with "model `…` is not resident". `ensure_serve`'s
+   `need_resident` restarts fv-serve with the session's model (e7e9961);
+   a session for another model while one is open is a 409 instead.
+5. **`aspect_ratio` was the CSS string.** The page sent `aspectOf()`'s
+   `1344 / 768` where fv-serve parses `W:H`, so **every** live stream and
+   segment from the page answered 400 `invalid aspect ratio` — shown as
+   "[object Object]" because fv-serve's error is an object (d02ae2f, and
+   the Worker and page now flatten it).
+6. **A forgotten session held the queue.** The failed probe left its
+   segment stream registered and the job loop waits for sessions: every
+   later job said "waiting for the live stream" until the session was
+   deleted by hand. The loop now prunes sessions whose fv-serve route
+   404s (8b0f2e5).
+
+Still not run on a pod: a live stream reaching `publishing` over WHEP.

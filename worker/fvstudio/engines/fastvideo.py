@@ -47,32 +47,77 @@ def media_urls(ctx: Ctx, job: Job) -> dict[str, Any]:
     return out
 
 
-def resident_config(base: str, variant: str) -> str:
-    """The worker's config with `variant` as its only model, `resident = true`:
-    fv-serve refuses a config where nothing loads before readiness, and it
-    refuses one whose models need different process-wide settings (H3 wants
-    FASTVIDEO_BF16_ACT=1, LTX does not), so one process serves one model and
-    the sidecar key carries the model: another fastvideo model restarts it."""
+def process_of(model) -> str:
+    """The fv-serve process a model runs in (`recipe.process`, else the
+    variant alone): fv-serve refuses one process for models that need
+    different process-wide settings (H3 wants FASTVIDEO_BF16_ACT=1, LTX does
+    not; FastWan 2.1's VSA flag is process-wide), and serves every model of
+    one family from one process with `[engine] swap = true` (fastvideo-rs's
+    runpod-family-{h3,ltx,streaming}.toml)."""
+    return model.recipe.get("process") or model.recipe.get("variant", "")
+
+
+def group_members(models: list, variant: str) -> list[str]:
+    """The variants sharing `variant`'s process, the requested one first;
+    `[variant]` alone without a catalog (unit tests)."""
+    out = [variant]
+    mine = next((m for m in models if m.engine == "fastvideo" and m.recipe.get("variant") == variant), None)
+    if mine is not None:
+        process = process_of(mine)
+        for m in models:
+            if m.engine == "fastvideo" and process_of(m) == process:
+                v = m.recipe.get("variant", "")
+                if v and v not in out:
+                    out.append(v)
+    return out
+
+
+def group_config(base: str, members: list[str], resident: str) -> str:
+    """The worker's config with the process group's models only, `resident`
+    marked `resident = true` (fv-serve refuses a config where nothing loads
+    before readiness) and the others `resident = false` (loaded on demand,
+    `[engine] swap = true` in the base)."""
     head, *blocks = base.split("[[models]]")
-    keep = None
+    keep: list[str] = []
+    found = False
     for b in blocks:
         m = re.search(r'variant\s*=\s*"([^"]+)"', b)
-        if m and m.group(1) == variant:
-            keep = re.sub(r"(?m)^\s*resident\s*=.*$", "resident = true", b)
-            if "resident = true" not in keep:
-                keep = keep.rstrip("\n") + "\nresident = true\n"
-            break
-    if keep is None:
-        raise JobError("validate", f"fastvideo config lists no model {variant!r}")
-    return head.rstrip("\n") + "\n\n[[models]]" + keep.rstrip("\n") + "\n"
+        if not m or m.group(1) not in members:
+            continue
+        want = "resident = true" if m.group(1) == resident else "resident = false"
+        found = found or m.group(1) == resident
+        k = re.sub(r"(?m)^\s*resident\s*=.*$", want, b)
+        if want not in k:
+            k = k.rstrip("\n") + "\n" + want + "\n"
+        keep.append("[[models]]" + k.rstrip("\n") + "\n")
+    if not found:
+        raise JobError("validate", f"fastvideo config lists no model {resident!r}")
+    return head.rstrip("\n") + "\n\n" + "\n".join(keep)
+
+
+def with_bind(cfg: str, port: int) -> str:
+    """The config with fv-serve bound to 127.0.0.1:<port>: the worker's port
+    table decides the port, not the file (in pod mode the serve itself holds
+    8000, the file's bind, and fv-serve died with "Address already in use")."""
+    out, in_server, done = [], False, False
+    for line in cfg.split("\n"):
+        t = line.strip()
+        if t.startswith("["):
+            in_server = t == "[server]"
+        if not done and in_server and t.startswith("bind") and t[4:].lstrip().startswith("="):
+            out.append(f'bind = "127.0.0.1:{port}"')
+            done = True
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 def serve_argv(ctx: Ctx, variant: str | None = None) -> list[str]:
-    if variant is None:
-        return [ctx.fv_serve_bin, "--config", ctx.fv_config]
     cfg = Path(ctx.fv_state_dir) / "fastvideo.toml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text(resident_config(Path(ctx.fv_config).read_text(), variant))
+    base = Path(ctx.fv_config).read_text()
+    text = group_config(base, group_members(ctx.models, variant), variant) if variant is not None else base
+    cfg.write_text(with_bind(text, ctx.ports[ENGINE]))
     return [ctx.fv_serve_bin, "--config", str(cfg)]
 
 
@@ -81,7 +126,9 @@ def run(ctx: Ctx, job: Job) -> RunResult:
     base = f"http://127.0.0.1:{port}"
     load_s = 0.0
     variant = job.model.recipe["variant"]
-    key = f"{KEY}:{variant}"  # one fv-serve per model (process-wide settings differ across families)
+    key = f"{KEY}:{process_of(job.model)}"  # one fv-serve per process group (a family: its models swap inside it)
+    # A job swaps inside the running process; only a live stream or a segment
+    # session (the pod's serve mode, Rust only) needs its own model resident.
     if not ctx.fv_fake:
         def make() -> Sidecar:
             return Sidecar(ENGINE, key, serve_argv(ctx, variant), ctx.env[ENGINE], ping_probe(f"{base}/ping"))

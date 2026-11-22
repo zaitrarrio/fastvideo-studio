@@ -46,3 +46,4 @@ class Ctx:
     fv_state_dir: str = "/workspace/fv-state"
     fv_weights: str = "/workspace/w"
     fv_fake: bool = False  # tests: a fake fv-serve already listens on the port
+    models: list = field(default_factory=list)  # the catalog's models (fv-serve process groups); empty in unit tests

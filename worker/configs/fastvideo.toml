@@ -6,7 +6,9 @@
 # swap = true` with every variant non-resident, so a job for another model
 # unloads the resident DiT and loads the requested one from the local disk.
 # Bound to loopback with no auth: only the handler on this container talks
-# to it. Artifacts stay on the container disk (`local`), jobs in memory.
+# to it. The port below is a placeholder: the worker rewrites `bind` to its
+# fastvideo port (8010 by default, STUDIO_FV_PORT) in the copy it starts
+# fv-serve with (`serve_argv`), since `studio-worker serve` holds 8000 on a pod. Artifacts stay on the container disk (`local`), jobs in memory.
 # This file is generated from catalog/catalog.json (the fastvideo models);
 # regenerate it when the catalog changes: worker/configs/gen_fastvideo_toml.py.
 

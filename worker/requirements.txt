@@ -1,2 +1,6 @@
-runpod==1.7.13
-boto3>=1.35,<2
+# The worker itself is stdlib-only (fvstudio/rp.py speaks RunPod's protocol,
+# fvstudio/r2.py signs R2 requests): nothing to install in the image.
+# Test tools (`cd worker && python3 -m pytest -q`); botocore only for the
+# signer-equality test in tests/test_r2.py, which is skipped without it.
+pytest
+botocore

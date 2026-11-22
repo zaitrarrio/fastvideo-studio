@@ -85,6 +85,7 @@ export function summaryText(item) {
   if (o.upscale?.factor) parts.push(`×${o.upscale.factor} to ${o.upscale.width}×${o.upscale.height}`);
   if (o.timings?.total_s != null) parts.push(`${fmt(o.timings.total_s)} total`);
   if (o.worker?.gpu) parts.push(shortGpu(o.worker.gpu));
+  if (item.backend === "pod") parts.push("pod");
   return parts.join(" · ");
 }
 
@@ -105,6 +106,18 @@ export function showClip(screen, video, empty, output, aspect) {
   }
 }
 
+// CSS `aspect-ratio` (`1344 / 768`), for the video box.
 export function aspectOf(w, h) {
   return w && h ? `${w} / ${h}` : "16 / 9";
+}
+
+// fv-serve's `aspect_ratio`: `W:H` in lowest terms (`16:9`). It parses a
+// colon only, so the CSS form above was refused with `invalid aspect ratio
+// \`1344 / 768\`; expected W:H` (2026-11-21: every live stream and segment
+// from the page answered 400).
+export function apiRatio(w, h) {
+  if (!w || !h) return "16:9";
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const g = gcd(Math.round(w), Math.round(h)) || 1;
+  return `${Math.round(w) / g}:${Math.round(h) / g}`;
 }

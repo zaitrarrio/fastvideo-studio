@@ -73,9 +73,16 @@ npx wrangler@4 r2 bucket create fastvideo-studio-uploads
 npx wrangler@4 secret put RUNPOD_API_KEY
 npx wrangler@4 secret put RUNPOD_ENDPOINT_ID
 npx wrangler@4 secret put STUDIO_TOKEN        # any long random string; the page asks for it once
+# for live streams on a pod (docs/pod-mode.md): the Cloudflare account id and a Stream token
+npx wrangler@4 secret put CF_ACCOUNT_ID
+npx wrangler@4 secret put CF_STREAM_API_TOKEN
 
 npx wrangler@4 deploy
 ```
+
+Secrets survive every deploy. Plain-text variables added in the dashboard
+survive only because `wrangler.toml` sets `keep_vars = true`; without it a
+deploy replaces them with the file's `[vars]`. Put tokens in secrets.
 
 `ENDPOINT_LABEL` (a `[vars]` entry) is shown in the header next to the
 status. The endpoint's worker must be able to read the `uploads/` prefix of

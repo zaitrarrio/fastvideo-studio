@@ -75,6 +75,20 @@ def test_bad_jobs_refused(catalog, patch, needle):
     assert needle in str(e.value)
 
 
+def test_an_older_pages_prompt_expansion_option_is_the_expand_prompt_knob(catalog):
+    # The page deployed on 2026-11-18 sends fv-serve's `prompt_expansion` ("disabled" by
+    # default) for every fastvideo model; the next day's image knows only `expand.prompt`.
+    fv = lambda opts: {"engine": "fastvideo", "model": "ltx25-distill-dense", "prompt": "p", "options": opts}  # noqa: E731
+    j = catalog.validate(fv({"prompt_expansion": "disabled"}))
+    assert j.options["expand.prompt"] == "off" and j.explicit["expand.prompt"] == "off"
+    j = catalog.validate(fv({"fv.prompt_expansion": "balanced"}))
+    assert j.explicit["expand.prompt"] == "balanced"
+    with pytest.raises(JobError, match="option prompt:"):
+        catalog.validate(fv({"prompt_expansion": "sometimes"}))
+    with pytest.raises(JobError, match="no option"):
+        catalog.validate(fv({"nope": 1}))
+
+
 def test_when_knob_with_default_is_dropped_not_refused(catalog):
     # The page sends every control; attention=auto leaves the preset's VSA, so vsa_sparsity stays.
     j = catalog.validate({**GOOD, "options": {"attention": "auto", "vsa_sparsity": 0.9, "dense_first_steps": 0}})

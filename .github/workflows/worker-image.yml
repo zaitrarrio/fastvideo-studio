@@ -13,6 +13,7 @@ on:
     branches: [main]
     paths:
       - "worker/**"
+      - "worker-rs/**"
       - "catalog/catalog.json"
       - ".github/workflows/worker-image.yml"
   workflow_dispatch:
@@ -47,10 +48,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unit tests (no engines needed)
+      - name: Unit tests of the reference Python worker (no engines needed)
         run: |
           python3 -m pip install --quiet pytest
           cd worker && python3 -m pytest -q tests -m "not e2e"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: worker-rs
+      - name: Unit tests of the Rust worker (the image's binary)
+        run: cd worker-rs && cargo test --locked
 
       - uses: docker/setup-buildx-action@v3
 

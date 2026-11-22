@@ -12,7 +12,7 @@ browser ── Studio page (static) ── Studio Worker (Cloudflare, holds the 
                                          │  /run /status /cancel          │ R2 (uploads, outputs)
                                          ▼                                ▼
                                RunPod queue endpoint ── worker container ── /runpod-volume (EU weights)
-                                                          handler.py
+                                                          studio-worker
                                                    ┌────────┼─────────┐
                                                 h3 serve  fastwan   fv-serve   (resident sidecars,
                                                 (h3-rs)   serve     (fastvideo-rs)  one per engine)
@@ -31,14 +31,28 @@ browser ── Studio page (static) ── Studio Worker (Cloudflare, holds the 
   (fv-serve's floor); a 13-capable driver runs the 12.8 runtime too.
 - **Queue, not load-balancer**: jobs run 10 s to 8 min; load-balancing
   endpoints cap a request at 5.5 min and drop on overload.
-- **`handler.py`** owns the RunPod job loop (`runpod` SDK, concurrency 1)
-  and dispatches on `input.engine`. Progress goes out with
-  `progress_update`; the result is JSON with presigned R2 URLs (the `/run`
-  output cap is 10 MB; an MP4 is not).
+- **`studio-worker`** (`worker-rs/`, Rust, the image's entrypoint) owns the
+  RunPod job loop (`rp.rs`: the SDK's protocol over a blocking HTTP client,
+  no SDK, concurrency 1) and dispatches on `input.engine`. It is a
+  module-for-module port of the Python worker (`worker/handler.py` +
+  `worker/fvstudio`), which stays in the tree as the reference the port is
+  checked against (same env vars, argv builders, progress ids, output JSON,
+  R2 signatures) until it is removed; the image no longer carries Python.
+  Progress goes out with `progress_update`; the result is JSON with presigned
+  R2 URLs (the `/run` output cap is 10 MB; an MP4 is not).
 - **Sidecars**: `h3 serve` and `fastwan serve` are kept resident, keyed by
   `(engine, model, recipe)`; a job for another model restarts that engine's
-  sidecar (h3: ~2 min from staged weights). `fv-serve` runs once with
-  `engine.swap = true` and every variant `resident = false`, bound to
+  sidecar (h3: ~2 min from staged weights). `fv-serve` runs one process per
+  **process group** (the catalog's `recipe.process`: `h3`, `ltx`, `ti2v-5b`,
+  `wan14b`, `fastwan21`, `streaming`): fv-serve refuses one process for
+  models whose process-wide settings differ (H3's `FASTVIDEO_BF16_ACT=1`
+  against LTX, FastWan 2.1's VSA flag against the Wan 2.2 TI2V recipe) and
+  serves a family from one process with `engine.swap = true`, as
+  fastvideo-rs's own `runpod-family-{h3,ltx,streaming}.toml` do. The
+  worker writes the group's `[[models]]` with the requested model `resident
+  = true` and the others `resident = false` (loaded on demand, swapping the
+  resident DiT out), keyed `fv-serve:<process>`: a job for another model of
+  the same group keeps the process; another group restarts it. Bound to
   127.0.0.1 with `auth.mode = none`, started directly (not through fv-boot:
   the handler does the volume link and weights itself). Before starting a
   sidecar the handler checks free VRAM (`nvidia-smi`) against the catalog's

@@ -1,5 +1,6 @@
 """End to end against the real engines in `--synthetic` mode on the CPU,
-a fake `runpod` module, a fake fv-serve and a local R2 (STUDIO_E2E=1):
+a recording `progress_update` in place of the RunPod loop, a fake fv-serve
+and a local R2 (STUDIO_E2E=1):
 
     cargo build --release -p h3-cli        (in h3-rs)
     cargo build --release -p fastwan-cli   (in fastwan-rs)
@@ -13,9 +14,7 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
-import types
 from pathlib import Path
 
 import pytest
@@ -47,20 +46,20 @@ def binaries():
     return build(H3, "h3-cli", "h3"), build(FASTWAN, "fastwan-cli", "fastwan")
 
 
+class ProgressRecorder:
+    """What `fvstudio.rp.RunpodClient.progress_update` would post: the
+    `(job id, progress object)` pairs, in order."""
+
+    def __init__(self):
+        self.updates = []
+
+    def progress_update(self, job, data):
+        self.updates.append((job["id"], data))
+
+
 @pytest.fixture(scope="module")
 def fake_runpod():
-    """`runpod.serverless.progress_update` / `start` as the handler uses them."""
-    mod = types.ModuleType("runpod")
-    serverless = types.ModuleType("runpod.serverless")
-    serverless.updates = []
-    serverless.progress_update = lambda job, data: serverless.updates.append((job["id"], data))
-    serverless.start = lambda cfg: None
-    mod.serverless = serverless
-    sys.modules["runpod"] = mod
-    sys.modules["runpod.serverless"] = serverless
-    yield serverless
-    sys.modules.pop("runpod", None)
-    sys.modules.pop("runpod.serverless", None)
+    return ProgressRecorder()
 
 
 @pytest.fixture(scope="module")

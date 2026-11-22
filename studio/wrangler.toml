@@ -4,6 +4,14 @@ name = "fastvideo-studio"
 main = "worker.js"
 compatibility_date = "2025-10-01"
 
+# Variables and secrets added in the dashboard survive a `wrangler deploy`.
+# Without this, every deploy replaces the dashboard's plain-text variables
+# with the [vars] table (2026-11-20: CF_ACCOUNT_ID and CF_STREAM_API_TOKEN,
+# added in the dashboard as variables, were wiped by the next deploy).
+# Secrets (`wrangler secret put`, or the dashboard's Secret type) always
+# survive; the Stream token belongs in one.
+keep_vars = true
+
 # The page. Requests that match a file under web/ are answered from the
 # asset store; everything else (the /api/* routes) reaches worker.js.
 [assets]
@@ -20,11 +28,28 @@ bucket_name = "fastvideo-studio"
 [vars]
 # Shown in the header next to the endpoint status.
 ENDPOINT_LABEL = "RunPod EU · PRO 6000"
+# The pod backend (docs/pod-mode.md): the worker image the pod runs in `serve`
+# mode (the same image as the endpoint's), its GPU type, data centre and the
+# weights volume, the container disk, the wall-clock cap in hours.
+POD_IMAGE = "ghcr.io/zaitrarrio/fastvideo-studio-worker:sha-91aba7b"
+POD_GPU = "NVIDIA RTX PRO 6000 Blackwell Server Edition"
+POD_DC = "EU-RO-1"
+POD_VOLUME = "bz0ofkfx45"
+POD_DISK_GB = "300"
+POD_HOURS = "4"
+POD_MIN_CUDA = "13.0"
+# The Studio bucket's S3 endpoint for the pod (the endpoint's STUDIO_R2_ENDPOINT).
+STUDIO_R2_ENDPOINT = "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com"
+STUDIO_R2_BUCKET = "fastvideo-studio"
 
 # Secrets (never in this file): `npx wrangler@4 secret put <NAME>`
-#   RUNPOD_API_KEY      the RunPod API key
-#   RUNPOD_ENDPOINT_ID  the serverless endpoint id (api.runpod.ai/v2/<id>)
-#   STUDIO_TOKEN        the shared secret the page sends as a bearer token
+#   RUNPOD_API_KEY       the RunPod API key (the queue endpoint and, for the pod, REST v2)
+#   RUNPOD_ENDPOINT_ID   the serverless endpoint id (api.runpod.ai/v2/<id>)
+#   STUDIO_TOKEN         the shared secret the page sends as a bearer token
+#   CF_ACCOUNT_ID        Cloudflare account id and a Stream token (Account > Stream > Edit):
+#   CF_STREAM_API_TOKEN  the pod's live streams publish to Cloudflare Stream with them.
+#                        Add them as secrets (the command above, or the dashboard's
+#                        Secret type), not as dashboard variables.
 
 [observability]
 enabled = true
